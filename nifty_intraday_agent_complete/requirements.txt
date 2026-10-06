@@ -4,6 +4,7 @@ streamlit>=1.36,<2
 python-dotenv>=1.0,<2
 pandas>=2.2,<3
 pandas-stubs>=2.2
+TA-Lib>=0.8,<1
 numpy>=2.0,<3
 requests>=2.32,<3
 feedparser>=6.0,<7

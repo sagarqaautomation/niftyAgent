@@ -142,6 +142,15 @@ class KiteMarketData:
             raise RuntimeError("Kite returned no NIFTY 50 LTP")
         return float(quote["last_price"])
 
+    def quotes(self, instruments: Sequence[str]) -> dict[str, dict[str, Any]]:
+        if not self.kite:
+            raise RuntimeError("Call connect() first")
+        if not instruments:
+            return {}
+        with self.http_lock:
+            result = self.kite.quote(list(instruments))
+        return cast(dict[str, dict[str, Any]], result)
+
     def set_instrument_tokens(self, instrument_tokens: Sequence[int]) -> None:
         self.instrument_tokens = list(dict.fromkeys(int(token) for token in instrument_tokens))
 

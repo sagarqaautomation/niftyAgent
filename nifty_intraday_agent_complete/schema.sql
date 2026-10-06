@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS equity_candles (
     rsi14 REAL,
     vwap REAL,
     atr14 REAL,
+    patterns_json TEXT NOT NULL DEFAULT '[]',
     UNIQUE(symbol, timeframe, timestamp)
 );
 

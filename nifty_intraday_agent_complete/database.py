@@ -152,6 +152,14 @@ def ensure_equity_feature_snapshot_column() -> None:
         if "feature_snapshot_json" not in columns:
             conn.execute("ALTER TABLE equity_signals ADD COLUMN feature_snapshot_json TEXT")
 
+def ensure_equity_candle_patterns_column() -> None:
+    with connect() as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(equity_candles)")}
+        if "patterns_json" not in columns:
+            conn.execute(
+                "ALTER TABLE equity_candles ADD COLUMN patterns_json TEXT NOT NULL DEFAULT '[]'"
+            )
+
 def expire_overdue_equity_outcomes() -> int:
     with connect() as conn:
         result = conn.execute("""
@@ -212,6 +220,7 @@ def init_db():
     ensure_market_status_columns()
     ensure_signal_columns()
     ensure_equity_feature_snapshot_column()
+    ensure_equity_candle_patterns_column()
     ensure_equity_signal_expired_status()
     expire_overdue_equity_outcomes()
     expire_stale_equity_signals()
@@ -258,18 +267,41 @@ def insert_equity_candles(candles: list[dict[str, Any]]) -> None:
     with connect() as conn:
         conn.executemany("""
         INSERT INTO equity_candles
-        (symbol,timeframe,timestamp,open,high,low,close,volume,ema9,ema21,rsi14,vwap,atr14)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        (symbol,timeframe,timestamp,open,high,low,close,volume,ema9,ema21,rsi14,vwap,atr14,patterns_json)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(symbol,timeframe,timestamp) DO UPDATE SET
         open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,
         volume=excluded.volume,ema9=excluded.ema9,ema21=excluded.ema21,
-        rsi14=excluded.rsi14,vwap=excluded.vwap,atr14=excluded.atr14
+        rsi14=excluded.rsi14,vwap=excluded.vwap,atr14=excluded.atr14,
+        patterns_json=excluded.patterns_json
         """, [(
             candle["symbol"], candle["timeframe"], candle["timestamp"],
             candle["open"], candle["high"], candle["low"], candle["close"],
             candle.get("volume", 0), candle.get("ema9"), candle.get("ema21"),
             candle.get("rsi14"), candle.get("vwap"), candle.get("atr14"),
+            json.dumps(candle.get("patterns", []), allow_nan=False),
         ) for candle in candles])
+
+def list_recent_equity_patterns(limit: int = 100) -> list[dict[str, Any]]:
+    with connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+        SELECT symbol,timeframe,timestamp,patterns_json
+        FROM equity_candles
+        WHERE patterns_json <> '[]'
+        ORDER BY timestamp DESC,id DESC LIMIT ?
+        """, (limit,)).fetchall()
+
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["patterns"] = json.loads(item.pop("patterns_json"))
+        item["pattern_names"] = ", ".join(
+            f"{pattern['name']} ({pattern['direction']})"
+            for pattern in item["patterns"]
+        )
+        results.append(item)
+    return results
 
 def list_spot_candles(limit: int = 50) -> list[dict[str, Any]]:
     with connect() as conn:
@@ -582,6 +614,27 @@ def resolve_equity_signal(
             UPDATE equity_signals SET status=?, result_price=?, resolved_at=?
             WHERE id=?
             """, (status, bar["close"], utc_now(), row_id))
+
+def resolve_equity_signal_at_price(symbol: str, price: float) -> str | None:
+    resolved_status: str | None = None
+    with connect() as conn:
+        rows = conn.execute("""
+        SELECT id, target_price, stop_loss
+        FROM equity_signals WHERE symbol=? AND status='OPEN'
+        """, (symbol,)).fetchall()
+        for row_id, target, stop in rows:
+            if price >= target:
+                status = "TARGET_HIT"
+            elif price <= stop:
+                status = "STOP_HIT"
+            else:
+                continue
+            conn.execute("""
+            UPDATE equity_signals SET status=?, result_price=?, resolved_at=?
+            WHERE id=? AND status='OPEN'
+            """, (status, float(price), utc_now(), row_id))
+            resolved_status = status
+    return resolved_status
 
 def list_equity_signals(limit: int = 50) -> list[dict[str, Any]]:
     with connect() as conn:

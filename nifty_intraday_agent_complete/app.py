@@ -8,7 +8,8 @@ import streamlit as st
 from config import settings
 from database import (
     init_db, performance, latest_signal, list_signals, list_news, list_spot_candles,
-    get_market_status, list_equity_signals_by_status, equity_signal_performance
+    get_market_status, list_equity_signals_by_status, equity_signal_performance,
+    list_recent_equity_patterns,
 )
 
 init_db()
@@ -256,6 +257,23 @@ def render_equities() -> None:
             streamlit_ui.dataframe(expired_df, width="stretch", hide_index=True)
         else:
             st.info("No equity signals have expired.")
+
+        st.subheader("Recent Candlestick Patterns")
+        pattern_df = pd.DataFrame(list_recent_equity_patterns(100))
+        if not pattern_df.empty:
+            pattern_cols = ["timestamp", "symbol", "timeframe", "pattern_names"]
+            pattern_df = pattern_df[
+                [column for column in pattern_cols if column in pattern_df.columns]
+            ].rename(columns={
+                "timestamp": "Candle time",
+                "pattern_names": "Detected patterns",
+            })
+            streamlit_ui.dataframe(pattern_df, width="stretch", hide_index=True)
+        else:
+            st.info("No candlestick patterns detected in stored equity candles yet.")
+        st.caption(
+            "Shadow analysis only: patterns do not change BUY decisions until backtested."
+        )
 
         equity_performance = equity_signal_performance()
         accuracy = equity_performance["accuracy_percent"]

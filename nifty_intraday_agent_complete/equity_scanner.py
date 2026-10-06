@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import pandas as pd
 
+from indicators import detect_latest_candlestick_patterns
 from signal_engine import add_risk_levels, build_signal
 
 
@@ -79,6 +80,20 @@ def build_equity_buy_signal(
     if analysis["signal"] != "CALL":
         return None
 
+    one_minute_patterns = detect_latest_candlestick_patterns(closed_minutes)
+    five_minute_patterns = detect_latest_candlestick_patterns(closed_five_minutes)
+    matched_patterns = one_minute_patterns + five_minute_patterns
+    bullish_patterns = [
+        pattern for pattern in matched_patterns
+        if pattern["direction"] == "BULLISH"
+    ]
+    bearish_patterns = [
+        pattern for pattern in matched_patterns
+        if pattern["direction"] == "BEARISH"
+    ]
+    if not bullish_patterns or bearish_patterns:
+        return None
+
     atr = analysis.get("atr")
     if atr is None or pd.isna(atr) or float(atr) <= 0:
         return None
@@ -105,7 +120,9 @@ def build_equity_buy_signal(
         )
 
     signal["reason"] = (
-        f"{signal['reason']}; estimated holding time uses recent 1-minute price movement"
+        f"{signal['reason']}; candlestick confirmation: "
+        f"{', '.join(sorted({pattern['name'] for pattern in bullish_patterns}))}; "
+        "estimated holding time uses recent 1-minute price movement"
     )
     signal["feature_snapshot"] = {
         "version": 1,
@@ -115,6 +132,8 @@ def build_equity_buy_signal(
         "news_bias": news_bias,
         "one_minute": _feature_row_snapshot(closed_minutes),
         "five_minute": _feature_row_snapshot(closed_five_minutes),
+        "one_minute_patterns": one_minute_patterns,
+        "five_minute_patterns": five_minute_patterns,
     }
     return signal
 

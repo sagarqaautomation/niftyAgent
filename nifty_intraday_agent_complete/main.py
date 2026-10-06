@@ -12,12 +12,14 @@ from database import (
     performance, resolve_with_bar, expire_signals, update_market_status,
     update_spot_status, insert_equity_signal, insert_equity_candles,
     resolve_equity_signal,
-    expire_stale_equity_signals,
+    expire_stale_equity_signals, list_equity_signals_by_status,
+    resolve_equity_signal_at_price,
     update_analysis_status, utc_now
 )
 from news_sources import fetch_all, aggregate_news
 from candle_engine import CandleEngine
 from signal_engine import build_signal, add_risk_levels
+from indicators import detect_candlestick_pattern_rows, detect_latest_candlestick_patterns
 from equity_scanner import (
     build_equity_buy_signal, load_watchlist,
     resolve_equity_tokens,
@@ -86,11 +88,30 @@ def equity_candle_record(
     timeframe: str,
     timestamp: pd.Timestamp | datetime | str,
     row: pd.Series[Any],
+    patterns: list[dict[str, str]] | None = None,
 ) -> CandleRecord:
     return {
         "symbol": symbol,
         **candle_record(timeframe, timestamp, row),
+        "patterns": patterns or [],
     }
+
+def equity_candle_records(
+    symbol: str,
+    timeframe: str,
+    frame: pd.DataFrame,
+) -> list[CandleRecord]:
+    pattern_rows = detect_candlestick_pattern_rows(frame)
+    return [
+        equity_candle_record(
+            symbol,
+            timeframe,
+            cast(pd.Timestamp, timestamp),
+            row,
+            pattern_rows.get(cast(pd.Timestamp, timestamp), []),
+        )
+        for timestamp, row in frame.iterrows()
+    ]
 
 def closed_bar_counts(
     frames: CandleFrames,
@@ -226,6 +247,7 @@ def main() -> None:
             instrument_token = int(future["instrument_token"])
         spot_token = int(settings.nifty_instrument_token) if settings.nifty_instrument_token else None
         equity_tokens_by_symbol: dict[str, int] = {}
+        equity_exchange_by_symbol: dict[str, str] = {}
         if settings.equity_scan_enabled:
             try:
                 equity_symbols = load_watchlist(settings.equity_watchlist_path)
@@ -233,6 +255,9 @@ def main() -> None:
                 equity_tokens_by_symbol, missing_equities = resolve_equity_tokens(
                     equity_instruments, equity_symbols
                 )
+                equity_exchange_by_symbol.update({
+                    symbol: "NSE" for symbol in equity_tokens_by_symbol
+                })
                 if missing_equities:
                     try:
                         bse_instruments = broker.get_instruments("BSE")
@@ -240,11 +265,14 @@ def main() -> None:
                             bse_instruments, missing_equities, exchange="BSE"
                         )
                         equity_tokens_by_symbol.update(bse_tokens)
+                        equity_exchange_by_symbol.update({
+                            symbol: "BSE" for symbol in bse_tokens
+                        })
                     except Exception as exc:
                         print(f"BSE equity fallback failed: {exc}")
                 print(
                     f"Equity watchlist: {len(equity_tokens_by_symbol)}/{len(equity_symbols)} "
-                    "NSE symbols resolved"
+                    "watchlist symbols resolved"
                 )
                 if missing_equities:
                     print("Unmatched equity symbols:", ", ".join(missing_equities))
@@ -508,6 +536,7 @@ def main() -> None:
                         "1min",
                         closed_equity_time,
                         equity_bar,
+                        detect_latest_candlestick_patterns(closed_equity_minutes),
                     )
                 ]
                 current_five_bucket = equity_current_minute.floor("5min")
@@ -524,6 +553,9 @@ def main() -> None:
                             "5min",
                             closed_five_time,
                             closed_equity_five_minutes.iloc[-1],
+                            detect_latest_candlestick_patterns(
+                                closed_equity_five_minutes
+                            ),
                         ))
                         last_equity_persisted_five_minute[equity_symbol] = closed_five_time
                 insert_equity_candles(equity_candle_rows)
@@ -744,6 +776,51 @@ def main() -> None:
         daemon=True,
     ).start()
 
+    stop_equity_reconcile = threading.Event()
+
+    def reconcile_open_equity_signals() -> None:
+        last_error_at = 0.0
+        while not stop_equity_reconcile.wait(5):
+            if market_session_has_ended():
+                break
+            expire_stale_equity_signals()
+            open_signals = list_equity_signals_by_status("OPEN", 500)
+            instruments_by_symbol = {
+                signal["symbol"]: (
+                    f"{equity_exchange_by_symbol[signal['symbol']]}:{signal['symbol']}"
+                )
+                for signal in open_signals
+                if signal["symbol"] in equity_exchange_by_symbol
+            }
+            if not instruments_by_symbol:
+                continue
+            try:
+                quotes = broker.quotes(list(instruments_by_symbol.values()))
+                for symbol, instrument in instruments_by_symbol.items():
+                    quote = quotes.get(instrument)
+                    if not quote or quote.get("last_price") is None:
+                        continue
+                    outcome = resolve_equity_signal_at_price(
+                        symbol, float(quote["last_price"])
+                    )
+                    if outcome:
+                        print(
+                            f"{symbol} {outcome} from REST quote "
+                            f"{float(quote['last_price']):.2f}",
+                            flush=True,
+                        )
+            except Exception as exc:
+                now = time.monotonic()
+                if now - last_error_at >= 60:
+                    print(f"Open equity quote reconciliation failed: {exc}", flush=True)
+                    last_error_at = now
+
+    threading.Thread(
+        target=reconcile_open_equity_signals,
+        name="equity-open-signal-reconcile",
+        daemon=True,
+    ).start()
+
     equity_history_end = pd.Timestamp.now(tz=settings.market_timezone).to_pydatetime()
     equity_history_start = equity_history_end - timedelta(days=5)
     for equity_index, (symbol, token) in enumerate(equity_tokens_by_symbol.items()):
@@ -765,20 +842,9 @@ def main() -> None:
                 closed_five_history = equity_frames["5min"].loc[
                     equity_frames["5min"].index < current_five_bucket
                 ]
-                equity_history_rows = [
-                    equity_candle_record(
-                        symbol,
-                        timeframe,
-                        cast(pd.Timestamp, timestamp),
-                        row,
-                    )
-                    for timeframe, frame in equity_frames.items()
-                    for timestamp, row in (
-                        frame.iterrows()
-                        if timeframe == "1min"
-                        else closed_five_history.iterrows()
-                    )
-                ]
+                equity_history_rows = equity_candle_records(
+                    symbol, "1min", equity_frames["1min"]
+                ) + equity_candle_records(symbol, "5min", closed_five_history)
                 if not closed_five_history.empty:
                     last_equity_persisted_five_minute[symbol] = cast(
                         pd.Timestamp, closed_five_history.index[-1]
@@ -799,6 +865,7 @@ def main() -> None:
         if market_session_has_ended():
             broker.stop()
             stop_spot_refresh.set()
+            stop_equity_reconcile.set()
             expire_stale_equity_signals(market_now, expire_all_open=True)
             closed_reason = "NSE session ended at 15:30 IST; live market data is closed."
             update_market_status(
