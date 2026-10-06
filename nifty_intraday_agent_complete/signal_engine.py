@@ -1,15 +1,38 @@
+from typing import Any
+
+import pandas as pd
+
 from indicators import candle_strength
 from config import settings
 
-def build_signal(df1, df5, news_bias="NEUTRAL", option_bias="NEUTRAL"):
+def build_signal(
+    df1: pd.DataFrame,
+    df5: pd.DataFrame,
+    news_bias: str = "NEUTRAL",
+    option_bias: str = "NEUTRAL",
+) -> dict[str, Any]:
     if len(df1) < 30 or len(df5) < 30:
         return {
             "signal": "WAIT", "technical_score": 0, "context_score": 0,
-            "total_score": 0, "reason": "Not enough candle history"
+            "total_score": 0, "reason": "Not enough candle history",
+            "analysis_state": "WARMING_UP",
         }
 
     a = df1.iloc[-1]
     t = df5.iloc[-1]
+    unavailable = []
+    if pd.isna(a["vwap"]):
+        unavailable.append("VWAP is unavailable")
+    volume_window = df1["volume"].fillna(0).tail(20)
+    if not volume_window.gt(0).any():
+        unavailable.append("no traded volume in the selected instrument")
+    if unavailable:
+        return {
+            "signal": "WAIT", "technical_score": 0, "context_score": 0,
+            "total_score": 0,
+            "reason": "; ".join(unavailable),
+            "analysis_state": "BLOCKED",
+        }
 
     bull = 0
     bear = 0
@@ -79,6 +102,11 @@ def build_signal(df1, df5, news_bias="NEUTRAL", option_bias="NEUTRAL"):
 
     total_score = technical_score + context_score
 
+    if direction == "WAIT" and technical_score < settings.min_total_score:
+        reasons.append(
+            f"score {technical_score}/{settings.min_total_score} below required threshold"
+        )
+
     if direction == "CALL" and context_score <= -2:
         direction = "WAIT"
         reasons.append("strongly conflicting context")
@@ -92,13 +120,14 @@ def build_signal(df1, df5, news_bias="NEUTRAL", option_bias="NEUTRAL"):
         "context_score": int(context_score),
         "total_score": int(total_score),
         "reason": "; ".join(reasons) if reasons else "No strong setup",
+        "analysis_state": direction,
         "news_bias": news_bias,
         "option_bias": option_bias,
         "entry_price": float(a["close"]) if direction != "WAIT" else None,
         "atr": float(a["atr14"]) if direction != "WAIT" and a["atr14"] == a["atr14"] else None,
     }
 
-def add_risk_levels(signal):
+def add_risk_levels(signal: dict[str, Any]) -> dict[str, Any]:
     if signal["signal"] == "WAIT" or not signal.get("entry_price") or not signal.get("atr"):
         signal["target_price"] = None
         signal["stop_loss"] = None

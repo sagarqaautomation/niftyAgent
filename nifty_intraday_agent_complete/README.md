@@ -12,6 +12,8 @@ A VS Code-ready Python project for a **research/alert-only** NIFTY intraday moni
 - Calculates entry, ATR-based stop-loss and risk/reward target.
 - Tracks every signal in SQLite.
 - Resolves signals against subsequent OHLC bars and records accuracy.
+- Persists per-equity 1-minute/5-minute candles and signal-time feature snapshots for replay and model research.
+- Exposes resolved equity outcomes with feature snapshots for offline training-data preparation; no AI model is trained or used yet.
 - Reads market-news RSS feeds such as Moneycontrol and LiveMint.
 - Sends optional WhatsApp alerts through Twilio.
 - Exposes REST endpoints for ChatGPT/other clients later.
@@ -176,6 +178,8 @@ Broker WebSocket
 
 The core signal engine does NOT require an LLM and does NOT call an AI model every second.
 
+On weekdays, the worker closes the Kite live-data WebSocket at 15:30 Asia/Kolkata and exits. If started after market close or on a weekend, it records the feed as `CLOSED` and does not connect. Start the worker again before the next trading session.
+
 ---
 
 ## 10. Signal logic
@@ -199,6 +203,13 @@ The default technical score uses:
 The engine returns WAIT when evidence is weak or conflicting.
 
 A signal is only considered eligible when the score passes the configured threshold.
+After a score-qualified setup, the worker sends a CALL or PUT alert on the next closed-candle evaluation using the current NIFTY spot price. The UI, candles, entry, stop, target, and outcome tracking use NIFTY spot units. Futures data is used internally for volume confirmation only; these directional alerts do not select an option contract or strike.
+
+### Equity scanner
+
+The live worker can also scan the symbols in `data/equity_watchlist.csv`. The file has 50 symbols in each category: `NIFTY50`, `LARGE_CAP` (Nifty Next 50), `MID_CAP` (Nifty Midcap 50), and `SMALL_CAP` (Nifty Smallcap 50), sourced from the official [Nifty 50](https://www.niftyindices.com/IndexConstituent/ind_nifty50list.csv), [Nifty Next 50](https://www.niftyindices.com/IndexConstituent/ind_niftynext50list.csv), [Nifty Midcap 50](https://www.niftyindices.com/IndexConstituent/ind_niftymidcap50list.csv), and [Nifty Smallcap 50](https://www.niftyindices.com/IndexConstituent/ind_niftysmallcap50list.csv) constituent files. Refresh the CSV after index reconstitutions. To use a custom list, keep one Kite `tradingsymbol` per row under the `symbol` column; the optional `category` column is for organization. The worker resolves only NSE cash-equity (`EQ`) instruments, subscribes to their live ticks, and loads minute history for indicator warm-up. Startup time increases with the number of symbols because history is fetched per stock.
+
+Set `EQUITY_SCAN_ENABLED=false` to disable the scanner, or set `EQUITY_WATCHLIST_PATH` to a different CSV path. Equity candidates are BUY-only CALL setups that pass the configured score threshold. Each signal is stored separately in the `equity_signals` table and shown in the dashboard with entry, target, stop-loss, scores, reason, status, and an estimated holding time. That estimate extrapolates the target distance from the average absolute one-minute close change over the latest 20 closed bars; it is a rough historical measure, not a prediction or guarantee. Equity signals do not place orders and are not sent to WhatsApp by this scanner.
 
 ---
 

@@ -28,12 +28,18 @@ class Settings:
     kite_api_secret: str = os.getenv("KITE_API_SECRET", "")
     kite_access_token: str = os.getenv("KITE_ACCESS_TOKEN", "")
     nifty_instrument_token: str = os.getenv("NIFTY_INSTRUMENT_TOKEN", "")
+    nifty_future_instrument_token: str = os.getenv("NIFTY_FUTURE_INSTRUMENT_TOKEN", "")
     kite_instruments_csv: str = os.getenv("KITE_INSTRUMENTS_CSV", "data/instruments.csv")
+    equity_scan_enabled: bool = env_bool("EQUITY_SCAN_ENABLED", True)
+    equity_watchlist_path: str = os.getenv(
+        "EQUITY_WATCHLIST_PATH", "data/equity_watchlist.csv"
+    )
     whatsapp_enabled: bool = env_bool("WHATSAPP_ENABLED", False)
     twilio_account_sid: str = os.getenv("TWILIO_ACCOUNT_SID", "")
     twilio_auth_token: str = os.getenv("TWILIO_AUTH_TOKEN", "")
     twilio_whatsapp_from: str = os.getenv("TWILIO_WHATSAPP_FROM", "")
     twilio_content_sid: str = os.getenv("TWILIO_CONTENT_SID", "")
+    twilio_content_variables: str = os.getenv("TWILIO_CONTENT_VARIABLES", "")
     whatsapp_to: str = os.getenv("WHATSAPP_TO", "")
     live_market_data: bool = env_bool("LIVE_MARKET_DATA", False)
     paper_trading: bool = env_bool("PAPER_TRADING", True)

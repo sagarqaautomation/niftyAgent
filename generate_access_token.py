@@ -1,11 +1,13 @@
 import os
+from getpass import getpass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PROJECT_DIR = ROOT / "nifty_intraday_agent_complete"
+ENV_FILE = PROJECT_DIR / ".env"
 
 try:
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv, set_key
 except ImportError as exc:
     raise RuntimeError(
         "python-dotenv is missing. Run: '" + str(ROOT / '.venv' / 'Scripts' / 'python.exe') + " -m pip install -r " + str(PROJECT_DIR / 'requirements.txt') + "'"
@@ -18,23 +20,10 @@ except ImportError as exc:
         "kiteconnect is missing. Run: '" + str(ROOT / '.venv' / 'Scripts' / 'python.exe') + " -m pip install -r " + str(PROJECT_DIR / 'requirements.txt') + "'"
     ) from exc
 
-env_candidates = [
-    ROOT / ".env",
-    PROJECT_DIR / ".env",
-    ROOT / "nifty_intraday_agent_complete" / ".env",
-]
-loaded_env = None
-for env_file in env_candidates:
-    if env_file.exists():
-        load_dotenv(env_file)
-        loaded_env = env_file
-        break
+if not ENV_FILE.is_file():
+    raise FileNotFoundError(f"Project .env file not found: {ENV_FILE}")
 
-if loaded_env is None:
-    raise FileNotFoundError(
-        "No .env file found. Place your Kite credentials in one of: "
-        f"{', '.join(str(p) for p in env_candidates)}"
-    )
+load_dotenv(ENV_FILE, override=True)
 
 api_key = os.getenv("KITE_API_KEY")
 api_secret = os.getenv("KITE_API_SECRET")
@@ -42,22 +31,24 @@ api_secret = os.getenv("KITE_API_SECRET")
 if not api_key or not api_secret:
     raise RuntimeError(
         "KITE_API_KEY or KITE_API_SECRET is missing in the active .env file. "
-        f"Loaded env: {loaded_env}"
+        f"Expected: {ENV_FILE}"
     )
 
 kite = KiteConnect(api_key=api_key)
 
-request_token = input("Paste request token: ").strip()
+print("Open this Kite Connect login URL in your browser and sign in:")
+print(kite.login_url())
+print("After Kite redirects, copy the request_token value from the redirect URL.")
+request_token = getpass("Kite request token (input hidden): ").strip()
 
 if not request_token:
     raise ValueError("Request token cannot be empty")
 
 session = kite.generate_session(request_token, api_secret=api_secret)
+updated, _, _ = set_key(
+    ENV_FILE, "KITE_ACCESS_TOKEN", session["access_token"], quote_mode="never"
+)
+if not updated:
+    raise RuntimeError(f"Could not update {ENV_FILE}; check file permissions.")
 
-print("\n==============================")
-print("KITE LOGIN SUCCESSFUL")
-print("==============================")
-print("User ID:", session["user_id"])
-print("User Name:", session["user_name"])
-print("Access Token:", session["access_token"])
-print("==============================")
+print(f"Kite access token saved to {ENV_FILE}")

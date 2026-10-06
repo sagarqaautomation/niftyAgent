@@ -18,7 +18,11 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     typical = (df["high"] + df["low"] + df["close"]) / 3
     volume = df["volume"].replace(0, np.nan)
-    df["vwap"] = (typical * volume).cumsum() / volume.cumsum()
+    if isinstance(df.index, pd.DatetimeIndex):
+        sessions = pd.Series(df.index.date, index=df.index)
+        df["vwap"] = (typical * volume).groupby(sessions).cumsum() / volume.groupby(sessions).cumsum()
+    else:
+        df["vwap"] = (typical * volume).cumsum() / volume.cumsum()
 
     prev_close = df["close"].shift(1)
     tr = pd.concat([

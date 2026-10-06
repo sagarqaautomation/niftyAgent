@@ -1,6 +1,9 @@
 import re
 from datetime import datetime, timezone
+from typing import Any, Literal
 import feedparser
+
+NewsItem = dict[str, Any]
 
 SOURCES = {
     "Moneycontrol": "https://www.moneycontrol.com/rss/marketreports.xml",
@@ -56,7 +59,9 @@ def fetch_all():
             print(f"News source failed: {source}: {exc}")
     return items
 
-def aggregate_news(items):
+def aggregate_news(
+    items: list[NewsItem],
+) -> Literal["BULLISH", "BEARISH", "NEUTRAL"]:
     score = sum(i.get("sentiment", 0) for i in items)
     if score >= 3:
         return "BULLISH"
