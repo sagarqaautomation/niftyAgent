@@ -162,6 +162,14 @@ Example:
 http://127.0.0.1:8000/health
 ```
 
+### MCP tools
+
+The project also provides a read-only MCP server for MCP-compatible clients. It exposes market status, the latest and recent NIFTY signals, NIFTY and equity performance, recent equity signals, stored news headlines, and separate NIFTY spot and futures candle tools. Futures candles are volume context; spot candles are the index OHLC series. It does not connect to Kite or place orders; the market-data worker continues to own those responsibilities.
+
+Install dependencies with `pip install -r requirements.txt`, then configure your MCP client to launch `mcp_server.py` over stdio. For example, in a VS Code MCP configuration, set `command` to the project's Python executable, `args` to the full path of `mcp_server.py`, and `cwd` to this project directory. Keep `cwd` set so `.env`, `schema.sql`, and `DB_PATH` resolve consistently. Start the app or API once first so the SQLite schema exists.
+
+The MCP tools limit list results to 1-500 rows. They only read persisted project data and are intended for research and monitoring, not trading decisions.
+
 ---
 
 ## 9. Live broker architecture
