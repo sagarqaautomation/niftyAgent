@@ -16,7 +16,8 @@ from typing import Any
 
 import pandas as pd
 
-from config import settings\nfrom accuracy_config import quality_settings as quality
+from config import settings
+from accuracy_config import quality_settings as quality
 from indicators import add_indicators
 from signal_engine import add_risk_levels, build_signal
 
