@@ -302,22 +302,6 @@ def build_signal(
         context_score -= 1
     context_score = max(-2, min(2, context_score))
 
-    if direction != "WAIT" and trade_quality_model is not None:
-        quality_trade = {
-            "direction": direction,
-            "regime": regime,
-            "structure": structure,
-            "hour": int(a.name.hour),
-            "score": int(technical_score),
-            "adx": adx if not pd.isna(adx) else None,
-            "rsi": rsi if not pd.isna(rsi) else None,
-        }
-        quality_ok, quality_failures = evaluate_trade_quality(
-            trade_quality_model, quality_trade
-        )
-        if not quality_ok:
-            direction = "WAIT"
-            reasons.extend(quality_failures)
     if direction == "CALL" and context_score <= -2:
         direction = "WAIT"
         reasons.append("strongly conflicting external context")
@@ -335,6 +319,22 @@ def build_signal(
     atr = _value(a, "atr14")
     vwap_distance_pct = ((close - vwap) / close * 100) if close and not pd.isna(vwap) else 0.0
     structure = "BULL_BREAKOUT" if structure_bull else "BEAR_BREAKDOWN" if structure_bear else "NONE"
+    if direction != "WAIT" and trade_quality_model is not None:
+        quality_trade = {
+            "direction": direction,
+            "regime": regime,
+            "structure": structure,
+            "hour": int(a.name.hour),
+            "score": int(technical_score),
+            "adx": adx if not pd.isna(adx) else None,
+            "rsi": rsi if not pd.isna(rsi) else None,
+        }
+        quality_ok, quality_failures = evaluate_trade_quality(
+            trade_quality_model, quality_trade
+        )
+        if not quality_ok:
+            direction = "WAIT"
+            reasons.extend(quality_failures)
     setup_key = _setup_key(direction, regime, adx, rsi, rel_volume, vwap_distance_pct, strength, structure, int(a.name.hour)) if direction != "WAIT" else None
     feature_snapshot = {
         "direction": direction, "regime": regime, "adx": adx, "rsi": rsi,
