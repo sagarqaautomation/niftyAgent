@@ -149,8 +149,7 @@ def run_backtest(\n    frame: pd.DataFrame,\n    probability_model: dict[str, An
         if decision_time.time() >= cutoff:
             continue
 
-        df1 = one.iloc[: i + 1]
-        df5 = five.loc[five.index < decision_time.floor("5min")]
+        # Indicators are precomputed, so use bounded history to avoid an O(n²) hotspot.\n        df1 = one.iloc[max(0, i - 1000) : i + 1]\n        df5 = five.loc[five.index < decision_time.floor("5min")].tail(300)
 
         if len(df5) < 40:
             continue
@@ -311,8 +310,7 @@ def walk_forward(frame: pd.DataFrame, folds: int = 5, progress: bool = False) ->
         def metrics(report: dict[str, Any]) -> dict[str, Any]:
             return {key: value for key, value in report.items() if key != "trades"}
 
-        filtered = run_backtest(validation, probability_model=model)
-        results.append(
+        filtered = run_backtest(validation, probability_model=model, label=f"fold-{i}-filtered")\n        log(f"[Fold {i}/{total_folds}] Filtered complete: {filtered.get('signals', 0)} signals, {filtered.get('win_rate_percent')}% win rate")\n        results.append(
             {
                 "fold": i,
                 "train_start": train.index[0].isoformat(),
