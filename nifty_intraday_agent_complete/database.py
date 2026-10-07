@@ -423,8 +423,9 @@ def insert_signal(s: dict[str, Any]) -> int:
         (created_at,signal,technical_score,context_score,total_score,entry_price,
          target_price,stop_loss,option_symbol,option_entry,reason,news_bias,option_bias,
          signal_instrument,signal_candle_time,spot_reference_price,spot_reference_time,
-         spot_trigger_price,spot_trigger_offset,spot_cross_price,spot_cross_time)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         spot_trigger_price,spot_trigger_offset,spot_cross_price,spot_cross_time,
+         market_regime,adx,relative_volume,feature_snapshot_json)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             utc_now(), s["signal"], s["technical_score"], s["context_score"],
             s["total_score"], s.get("entry_price"), s.get("target_price"),
@@ -433,7 +434,10 @@ def insert_signal(s: dict[str, Any]) -> int:
             s.get("signal_instrument"), s.get("signal_candle_time"),
             s.get("spot_reference_price"), s.get("spot_reference_time"),
             s.get("spot_trigger_price"), s.get("spot_trigger_offset"),
-            s.get("spot_cross_price"), s.get("spot_cross_time")
+            s.get("spot_cross_price"), s.get("spot_cross_time"),
+            s.get("market_regime"), s.get("adx"), s.get("relative_volume"),
+            json.dumps(s.get("feature_snapshot"), allow_nan=False)
+            if s.get("feature_snapshot") is not None else None,
         ))
         row_id = cur.lastrowid
         return int(row_id) if row_id is not None else 0
