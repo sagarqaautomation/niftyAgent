@@ -22,6 +22,7 @@ from accuracy_config import quality_settings as quality
 from indicators import add_indicators
 from signal_engine import add_risk_levels, build_signal
 from probability_engine import fit_probability_model, save_model
+from trade_quality_engine import fit_trade_quality_model
 
 
 @dataclass
@@ -135,6 +136,7 @@ def run_backtest(
     label: str | None = None,
     progress: bool = False,
     probability_threshold: float | None = None,
+    trade_quality_model: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     minute = frame.copy()
     one = add_indicators(minute)
@@ -170,6 +172,7 @@ def run_backtest(
             use_volume_confirmation=False,
             probability_model=probability_model,
             probability_threshold=probability_threshold,
+            trade_quality_model=trade_quality_model,
         )
         direction = signal["signal"]
 
@@ -325,6 +328,24 @@ def walk_forward(frame: pd.DataFrame, folds: int = 5, progress: bool = False, pr
             label=f"fold-{i}-filtered",
             probability_threshold=probability_threshold,
         )
+        log(f"[Fold {i}/{total_folds}] Fitting trade-quality model...")
+        quality_model = fit_trade_quality_model(train_report["trades"])
+        log(
+            f"[Fold {i}/{total_folds}] Quality model fitted: "
+            f"{len(quality_model.get('vetoes', []))} vetoes"
+        )
+        log(f"[Fold {i}/{total_folds}] Running trade-quality validation...")
+        quality_filtered = run_backtest(
+            validation,
+            label=f"fold-{i}-quality",
+            trade_quality_model=quality_model,
+        )
+        log(
+            f"[Fold {i}/{total_folds}] Quality complete: "
+            f"{quality_filtered.get('signals', 0)} signals, "
+            f"{quality_filtered.get('win_rate_percent')}% win rate"
+        )
+
         log(
             f"[Fold {i}/{total_folds}] Filtered complete: "
             f"{filtered.get('signals', 0)} signals, "
@@ -340,12 +361,17 @@ def walk_forward(frame: pd.DataFrame, folds: int = 5, progress: bool = False, pr
                 "train_samples": model.get("samples", 0),
                 "baseline": metrics(baseline),
                 "probability_filtered": metrics(filtered),
+                "trade_quality_filtered": metrics(quality_filtered),
                 "improvement": {
                     "win_rate_points": round((filtered.get("win_rate_percent") or 0) - (baseline.get("win_rate_percent") or 0), 2),
                     "average_r_delta": round((filtered.get("average_r") or 0) - (baseline.get("average_r") or 0), 4),
                     "profit_factor_delta": round((filtered.get("profit_factor") or 0) - (baseline.get("profit_factor") or 0), 4),
                     "signals_kept": filtered.get("signals", 0),
                     "signals_baseline": baseline.get("signals", 0),
+                    "quality_win_rate_points": round((quality_filtered.get("win_rate_percent") or 0) - (baseline.get("win_rate_percent") or 0), 2),
+                    "quality_average_r_delta": round((quality_filtered.get("average_r") or 0) - (baseline.get("average_r") or 0), 4),
+                    "quality_profit_factor_delta": round((quality_filtered.get("profit_factor") or 0) - (baseline.get("profit_factor") or 0), 4),
+                    "quality_signals_kept": quality_filtered.get("signals", 0),
                 },
             }
         )
