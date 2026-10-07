@@ -420,3 +420,39 @@ Show today's news bias.
 ```
 
 The ChatGPT layer should explain signals, not replace the deterministic market-data engine.
+
+
+## v2.1 accuracy engine
+
+The v2.1 branch adds quality gates intended to reduce false positives before any live trading use:
+
+- 5-minute trend slope and ADX regime detection.
+- Relative-volume baseline that excludes the current candle.
+- Prior-day high/low and completed 15-minute opening-range structure.
+- Stronger range/high-volatility score requirements.
+- Point-in-time signal feature snapshots for later model research.
+- Time-aware news filtering so stale headlines do not drive intraday context.
+- Setup reset + cooldown logic instead of suppressing every repeated signal forever.
+- Risk-adjusted performance metrics: average R and profit factor.
+- A look-ahead-safe historical backtester with ambiguous-bar handling and walk-forward reporting.
+
+### Historical backtest
+
+Prepare a CSV with:
+
+    timestamp,open,high,low,close,volume
+    2026-01-05 09:15:00+05:30,25000,25010,24990,25005,12345
+    ...
+
+Run from the project directory:
+
+    python backtester.py data/nifty_1m.csv
+    python backtester.py data/nifty_1m.csv --walk-forward --folds 5
+
+The evaluator generates the signal only after a closed candle and enters at the next 1-minute candle open. If both target and stop are touched inside one OHLC candle, it records AMBIGUOUS instead of assuming which one was hit first.
+
+Do not optimize parameters on the same period used for the final performance claim. Use the walk-forward validation output to judge whether improvements survive unseen periods.
+
+### Important live-data note
+
+Kite historical candle timestamps represent the start of the candle, and Kite recommends building live candles from WebSocket data for live strategies. The v2.1 evaluator therefore treats the current live candle as mutable and only evaluates completed candles.
