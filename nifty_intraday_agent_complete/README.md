@@ -422,6 +422,43 @@ Show today's news bias.
 The ChatGPT layer should explain signals, not replace the deterministic market-data engine.
 
 
+## v2.1 historical NIFTY data download
+
+If you do not already have a 1-minute CSV, the project can download NIFTY 50 index candles directly through the same Kite Connect credentials used by the agent:
+
+```powershell
+python download_nifty_data.py --months 6
+```
+
+This creates:
+
+```text
+data/nifty_1m.csv
+```
+
+You can also specify an exact range:
+
+```powershell
+python download_nifty_data.py --start 2026-01-01 --end 2026-06-30
+```
+
+The downloader automatically splits requests into smaller chunks and throttles them. Kite's historical API supports minute candles and limits a single minute-data request to 60 calendar days, so the downloader does not request a larger window at once. The generated CSV is normalized to timestamp,open,high,low,close,volume, which is the format expected by backtester.py.
+
+### Important volume limitation
+
+NIFTY 50 itself is an index and does not have traded volume, so Kite returns zero volume for its historical index candles. That means the V2.1 relative-volume confirmation cannot be honestly validated from the NIFTY spot/index CSV alone. For a production-quality backtest, use a separate NIFTY futures volume series or run an explicitly price-only backtest; do not manufacture volume values.
+
+The downloader prints a warning when it detects this condition.
+
+### Recommended validation flow
+
+```powershell
+python download_nifty_data.py --months 6
+python backtester.py data/nifty_1m.csv --walk-forward --folds 5
+```
+
+The first run validates the price/structure engine. Before using the result to claim V2.1 accuracy, add a historical futures-volume source so the volume gate is evaluated with real data.
+
 ## v2.1 accuracy engine
 
 The v2.1 branch adds quality gates intended to reduce false positives before any live trading use:
