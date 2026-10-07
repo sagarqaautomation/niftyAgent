@@ -75,7 +75,7 @@ def _resolve_trade(
         trade.status = "EXPIRED"
         return trade
 
-    expiry = pd.Timestamp(trade.entry_time) + pd.Timedelta(minutes=settings.signal_expiry_minutes)
+    expiry = pd.Timestamp(trade.entry_time) + pd.to_timedelta(settings.signal_expiry_minutes, unit="min")
     future = future.loc[future.index <= expiry]
 
     for timestamp, bar in future.iterrows():
@@ -141,9 +141,7 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
         reset_bars = 0
         if direction == last_direction:
             continue
-        if last_signal_bar is not None and decision_time - last_signal_bar < pd.Timedelta(
-            minutes=quality.signal_cooldown_minutes
-        ):
+        if last_signal_bar is not None and decision_time - last_signal_bar < pd.to_timedelta(quality.signal_cooldown_minutes, unit="min"):
             continue
 
         entry_time = one.index[i + 1]
