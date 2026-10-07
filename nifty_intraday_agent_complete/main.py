@@ -6,7 +6,7 @@ from typing import Any, cast
 import pandas as pd
 from zoneinfo import ZoneInfo
 
-from config import settings
+from config import settings\nfrom accuracy_config import quality_settings as quality
 from database import (
     init_db, insert_news, insert_candles, insert_spot_candles, insert_signal,
     performance, resolve_with_bar, expire_signals, update_market_status,
@@ -47,7 +47,7 @@ def refresh_news() -> str:
     items: list[NewsItem] = cast(list[NewsItem], fetch_all())
     for item in items:
         insert_news(item)
-    return cast(str, aggregate_news(items, settings.news_max_age_minutes))
+    return cast(str, aggregate_news(items, quality.news_max_age_minutes))
 
 def candle_record(
     timeframe: str,
@@ -708,7 +708,7 @@ def main() -> None:
                         direction = result["signal"]
                         if direction == "WAIT":
                             setup_reset_count += 1
-                            if setup_reset_count >= settings.setup_reset_bars:
+                            if setup_reset_count >= quality.setup_reset_bars:
                                 last_alert_direction = None
                             continue
 
@@ -723,11 +723,11 @@ def main() -> None:
                         if (
                             last_alert_bar is not None
                             and closed_timestamp - last_alert_bar
-                            < pd.Timedelta(minutes=settings.signal_cooldown_minutes)
+                            < pd.Timedelta(minutes=quality.signal_cooldown_minutes)
                         ):
                             update_analysis_status(
                                 "COOLDOWN", result["technical_score"],
-                                f"New {direction} setup blocked by {settings.signal_cooldown_minutes}-minute signal cooldown.",
+                                f"New {direction} setup blocked by {quality.signal_cooldown_minutes}-minute signal cooldown.",
                             )
                             continue
 
