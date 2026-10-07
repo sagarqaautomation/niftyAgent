@@ -166,7 +166,7 @@ def run_backtest(
             "NEUTRAL",
             "NEUTRAL",
             use_volume_confirmation=False,
-            probability_model=probability_model,
+            probability_model=probability_model,\n            probability_threshold=probability_threshold,
         )
         direction = signal["signal"]
 
@@ -280,7 +280,7 @@ def run_backtest(
     }
 
 
-def walk_forward(frame: pd.DataFrame, folds: int = 5, progress: bool = False) -> list[dict[str, Any]]:
+def walk_forward(frame: pd.DataFrame, folds: int = 5, progress: bool = False, probability_threshold: float = 0.50) -> list[dict[str, Any]]:
     if folds < 2:
         raise ValueError("folds must be >= 2")
 
@@ -316,7 +316,7 @@ def walk_forward(frame: pd.DataFrame, folds: int = 5, progress: bool = False) ->
         def metrics(report: dict[str, Any]) -> dict[str, Any]:
             return {key: value for key, value in report.items() if key != "trades"}
 
-        filtered = run_backtest(validation, probability_model=model, label=f"fold-{i}-filtered")\n        log(f"[Fold {i}/{total_folds}] Filtered complete: {filtered.get('signals', 0)} signals, {filtered.get('win_rate_percent')}% win rate")\n        results.append(
+        filtered = run_backtest(validation, probability_model=model, label=f"fold-{i}-filtered", probability_threshold=probability_threshold)\n        log(f"[Fold {i}/{total_folds}] Filtered complete: {filtered.get('signals', 0)} signals, {filtered.get('win_rate_percent')}% win rate")\n        results.append(
             {
                 "fold": i,
                 "train_start": train.index[0].isoformat(),
@@ -347,14 +347,14 @@ def main() -> None:
         help="OHLCV CSV with timestamp,open,high,low,close,volume",
     )
     parser.add_argument("--folds", type=int, default=5)
-    parser.add_argument("--walk-forward", action="store_true")\n    parser.add_argument("--progress", action="store_true", help="print fold progress while running")
+    parser.add_argument("--walk-forward", action="store_true")\n    parser.add_argument("--progress", action="store_true", help="print fold progress while running")\n    parser.add_argument("--probability-threshold", type=float, default=0.50, help="minimum modeled win probability for walk-forward filtering")
     parser.add_argument("--fit-profiles", help="legacy exact setup profile output (kept for compatibility)")
     parser.add_argument("--fit-probability-model", help="write broad feature probability model from this backtest")
     args = parser.parse_args()
 
     frame = load_ohlcv_csv(args.csv)
     result = (
-        walk_forward(frame, args.folds, progress=args.progress)
+        walk_forward(frame, args.folds, progress=args.progress, probability_threshold=args.probability_threshold)
         if args.walk_forward
         else run_backtest(frame, progress=args.progress)
     )
