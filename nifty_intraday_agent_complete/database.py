@@ -72,6 +72,10 @@ def ensure_signal_columns() -> None:
         "spot_trigger_offset": "REAL",
         "spot_cross_price": "REAL",
         "spot_cross_time": "TEXT",
+        "market_regime": "TEXT",
+        "adx": "REAL",
+        "relative_volume": "REAL",
+        "feature_snapshot_json": "TEXT",
     }
     with connect() as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(signals)")}
