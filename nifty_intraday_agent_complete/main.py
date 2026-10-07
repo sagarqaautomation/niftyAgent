@@ -168,6 +168,35 @@ def process_frames(
 
     signal: Signal = build_signal(df1, df5, news_bias, option_bias)
     signal["signal_instrument"] = signal_instrument or "NIFTY spot index"
+
+    def feature_snapshot(frame: pd.DataFrame) -> dict[str, Any]:
+        row = frame.iloc[-1]
+        fields = (
+            "open", "high", "low", "close", "volume", "ema9", "ema21",
+            "ema9_slope", "ema21_slope", "rsi14", "vwap", "atr14",
+            "atr_pct", "adx14", "plus_di14", "minus_di14",
+            "relative_volume20", "body_pct", "close_location",
+            "prior_day_high", "prior_day_low", "opening_range_high",
+            "opening_range_low",
+        )
+        snapshot: dict[str, Any] = {}
+        for field in fields:
+            value = row.get(field)
+            if value is not None and pd.notna(value):
+                snapshot[field] = float(value)
+        return snapshot
+
+    signal["feature_snapshot"] = {
+        "version": 2,
+        "signal_candle_time": df1.index[-1].isoformat(),
+        "market_regime": signal.get("market_regime"),
+        "technical_score": signal.get("technical_score"),
+        "context_score": signal.get("context_score"),
+        "news_bias": news_bias,
+        "option_bias": option_bias,
+        "one_minute": feature_snapshot(df1),
+        "five_minute": feature_snapshot(df5),
+    }
     signal["signal_candle_time"] = (
         spot_reference["timestamp"] if spot_reference else df1.index[-1].isoformat()
     )
