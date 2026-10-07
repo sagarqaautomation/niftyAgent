@@ -318,7 +318,18 @@ def walk_forward(frame: pd.DataFrame, folds: int = 5, progress: bool = False, pr
         def metrics(report: dict[str, Any]) -> dict[str, Any]:
             return {key: value for key, value in report.items() if key != "trades"}
 
-        filtered = run_backtest(validation, probability_model=model, label=f"fold-{i}-filtered", probability_threshold=probability_threshold)\n        log(f"[Fold {i}/{total_folds}] Filtered complete: {filtered.get('signals', 0)} signals, {filtered.get('win_rate_percent')}% win rate")\n        results.append(
+        filtered = run_backtest(
+            validation,
+            probability_model=model,
+            label=f"fold-{i}-filtered",
+            probability_threshold=probability_threshold,
+        )
+        log(
+            f"[Fold {i}/{total_folds}] Filtered complete: "
+            f"{filtered.get('signals', 0)} signals, "
+            f"{filtered.get('win_rate_percent')}% win rate"
+        )
+        results.append(
             {
                 "fold": i,
                 "train_start": train.index[0].isoformat(),
