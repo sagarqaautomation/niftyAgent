@@ -221,7 +221,9 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
 def walk_forward(frame: pd.DataFrame, folds: int = 5) -> list[dict[str, Any]]:
     if folds < 2:
         raise ValueError("folds must be >= 2")
-    boundaries = np.linspace(0, len(frame), folds + 1, dtype=int)\n    chunks = [frame.iloc[boundaries[i]:boundaries[i + 1]] for i in range(folds)]\n    results: list[dict[str, Any]] = []
+    boundaries = np.linspace(0, len(frame), folds + 1, dtype=int)
+    chunks = [frame.iloc[boundaries[i]:boundaries[i + 1]] for i in range(folds)]
+    results: list[dict[str, Any]] = []
     for i in range(1, len(chunks)):
         train = pd.concat(chunks[:i])
         validation = chunks[i]
