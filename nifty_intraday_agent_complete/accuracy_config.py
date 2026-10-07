@@ -30,6 +30,10 @@ class QualitySettings:
     signal_cooldown_minutes: int = _int("SIGNAL_COOLDOWN_MINUTES", 5)
     setup_reset_bars: int = _int("SETUP_RESET_BARS", 3)
     news_max_age_minutes: int = _int("NEWS_MAX_AGE_MINUTES", 60)
+    probability_gate_enabled: bool = _bool("PROBABILITY_GATE_ENABLED", False)
+    probability_min_win_rate: float = _float("PROBABILITY_MIN_WIN_RATE", 0.60)
+    probability_min_samples: int = _int("PROBABILITY_MIN_SAMPLES", 40)
+    setup_profiles_path: str = os.getenv("SETUP_PROFILES_PATH", "data/setup_profiles.json")
 
     # Experimental strict filter. Keep disabled by default until it proves
     # an out-of-sample improvement in walk-forward validation.

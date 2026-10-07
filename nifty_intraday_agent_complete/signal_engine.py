@@ -1,3 +1,5 @@
+from pathlib import Path
+import json
 from typing import Any
 
 import pandas as pd
@@ -114,6 +116,33 @@ def _precision_gate(
         failures.append("candle strength confirmation is missing")
 
     return not failures, failures
+
+
+def _setup_key(direction: str, regime: str, adx: float, rsi: float, rel_volume: float,
+               vwap_distance_pct: float, candle_strength_value: float,
+               structure: str, hour: int) -> str:
+    adx_bin = "<20" if pd.isna(adx) or adx < 20 else "20-25" if adx < 25 else "25-30" if adx < 30 else "30+"
+    rsi_bin = "<40" if pd.isna(rsi) or rsi < 40 else "40-50" if rsi < 50 else "50-60" if rsi < 60 else "60+"
+    vol_bin = "<1" if pd.isna(rel_volume) or rel_volume < 1 else "1-1.25" if rel_volume < 1.25 else "1.25+"
+    vwap_bin = "below-0.1" if vwap_distance_pct < -0.10 else "near" if vwap_distance_pct <= 0.10 else "above-0.1"
+    candle_bin = "weak" if candle_strength_value < 0.50 else "medium" if candle_strength_value < 0.65 else "strong"
+    return "|".join([direction, regime, adx_bin, rsi_bin, vol_bin, vwap_bin, candle_bin, structure, str(hour)])
+
+
+def _historical_probability(setup_key: str) -> tuple[float | None, int]:
+    if not quality.probability_gate_enabled:
+        return None, 0
+    path = Path(quality.setup_profiles_path)
+    if not path.exists():
+        return None, 0
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        profile = payload.get("profiles", {}).get(setup_key)
+        if not profile:
+            return None, 0
+        return float(profile.get("lower_bound", profile.get("win_rate", 0.0))), int(profile.get("samples", 0))
+    except (OSError, ValueError, TypeError):
+        return None, 0
 
 
 def build_signal(
@@ -291,6 +320,17 @@ def build_signal(
 
     total_score = technical_score + context_score
     atr = _value(a, "atr14")
+    vwap_distance_pct = ((close - vwap) / close * 100) if close and not pd.isna(vwap) else 0.0
+    structure = "BULL_BREAKOUT" if structure_bull else "BEAR_BREAKDOWN" if structure_bear else "NONE"
+    setup_key = _setup_key(direction, regime, adx, rsi, rel_volume, vwap_distance_pct, strength, structure, int(a.name.hour)) if direction != "WAIT" else None
+    historical_probability, historical_samples = _historical_probability(setup_key) if setup_key else (None, 0)
+    if direction != "WAIT" and quality.probability_gate_enabled:
+        if historical_probability is None or historical_samples < quality.probability_min_samples:
+            direction = "WAIT"
+            reasons.append("no sufficiently sampled historical setup profile")
+        elif historical_probability < quality.probability_min_win_rate:
+            direction = "WAIT"
+            reasons.append(f"historical setup probability {historical_probability:.1%} below threshold")
 
     return {
         "signal": direction,
@@ -309,6 +349,9 @@ def build_signal(
         "atr": atr if direction != "WAIT" and not pd.isna(atr) else None,
         "precision_mode": quality.precision_mode,
         "precision_gate_passed": precision_ok,
+        "setup_key": setup_key,
+        "historical_probability": historical_probability,
+        "historical_samples": historical_samples,
     }
 
 
