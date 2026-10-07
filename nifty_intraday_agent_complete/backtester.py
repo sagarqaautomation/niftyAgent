@@ -21,6 +21,7 @@ from config import settings
 from accuracy_config import quality_settings as quality
 from indicators import add_indicators
 from signal_engine import add_risk_levels, build_signal
+from probability_engine import fit_probability_model, save_model
 
 
 @dataclass
@@ -128,7 +129,7 @@ def _session_cutoff() -> datetime_time:
     return datetime_time(cutoff_minutes // 60, cutoff_minutes % 60)
 
 
-def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
+def run_backtest(frame: pd.DataFrame, probability_model: dict[str, Any] | None = None) -> dict[str, Any]:
     minute = frame.copy()
     one = add_indicators(minute)
     five = add_indicators(_resample_5m(minute))
@@ -160,6 +161,7 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
             "NEUTRAL",
             "NEUTRAL",
             use_volume_confirmation=False,
+            probability_model=probability_model,
         )
         direction = signal["signal"]
 
@@ -287,7 +289,14 @@ def walk_forward(frame: pd.DataFrame, folds: int = 5) -> list[dict[str, Any]]:
     for i in range(1, len(chunks)):
         train = pd.concat(chunks[:i])
         validation = chunks[i]
-        report = run_backtest(validation)
+        baseline = run_backtest(validation)
+        train_report = run_backtest(train)
+        model = fit_probability_model(train_report["trades"])
+
+        def metrics(report: dict[str, Any]) -> dict[str, Any]:
+            return {key: value for key, value in report.items() if key != "trades"}
+
+        filtered = run_backtest(validation, probability_model=model)
         results.append(
             {
                 "fold": i,
@@ -295,10 +304,15 @@ def walk_forward(frame: pd.DataFrame, folds: int = 5) -> list[dict[str, Any]]:
                 "train_end": train.index[-1].isoformat(),
                 "validation_start": validation.index[0].isoformat(),
                 "validation_end": validation.index[-1].isoformat(),
-                "validation": {
-                    key: value
-                    for key, value in report.items()
-                    if key != "trades"
+                "train_samples": model.get("samples", 0),
+                "baseline": metrics(baseline),
+                "probability_filtered": metrics(filtered),
+                "improvement": {
+                    "win_rate_points": round((filtered.get("win_rate_percent") or 0) - (baseline.get("win_rate_percent") or 0), 2),
+                    "average_r_delta": round((filtered.get("average_r") or 0) - (baseline.get("average_r") or 0), 4),
+                    "profit_factor_delta": round((filtered.get("profit_factor") or 0) - (baseline.get("profit_factor") or 0), 4),
+                    "signals_kept": filtered.get("signals", 0),
+                    "signals_baseline": baseline.get("signals", 0),
                 },
             }
         )
@@ -315,7 +329,8 @@ def main() -> None:
     )
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--walk-forward", action="store_true")
-    parser.add_argument("--fit-profiles", help="write setup probability profiles from this backtest")
+    parser.add_argument("--fit-profiles", help="legacy exact setup profile output (kept for compatibility)")
+    parser.add_argument("--fit-probability-model", help="write broad feature probability model from this backtest")
     args = parser.parse_args()
 
     frame = load_ohlcv_csv(args.csv)
@@ -330,6 +345,11 @@ def main() -> None:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(profiles, indent=2), encoding="utf-8")
         result["setup_profiles_path"] = str(output)
+    if args.fit_probability_model and not args.walk_forward:
+        model = fit_probability_model(result["trades"])
+        save_model(model, args.fit_probability_model)
+        result["probability_model_path"] = str(args.fit_probability_model)
+        result["probability_model_samples"] = model.get("samples", 0)
     print(json.dumps(result, indent=2))
 
 
