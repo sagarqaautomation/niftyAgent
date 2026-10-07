@@ -13,6 +13,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from datetime import time as datetime_time
 
 import numpy as np
 import pandas as pd
@@ -119,10 +120,28 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
     last_signal_bar: pd.Timestamp | None = None
     last_direction: str | None = None
     reset_bars = 0
+    blocked_until: pd.Timestamp | None = None
 
     # The signal at bar i is evaluated after bar i closes and entered at i+1 open.
+    # Only one position may be active at a time. This prevents the historical
+    # evaluator from using future candles to resolve one trade while also opening
+    # another overlapping trade, which would not match a single-position live flow.
     for i in range(max(60, quality.minimum_history_bars), len(one) - 1):
         decision_time = one.index[i]
+        if blocked_until is not None and decision_time <= blocked_until:
+            continue
+
+        # Do not create a new trade when the remaining session is shorter than
+        # the configured signal expiry window. This mirrors live-session risk
+        # controls and prevents end-of-day signals from being artificially
+        # counted as valid setups that cannot realistically complete.
+        session_end = datetime_time(15, 30)
+        expiry_minutes = int(settings.signal_expiry_minutes)
+        cutoff_minutes = session_end.hour * 60 + session_end.minute - expiry_minutes
+        cutoff = datetime_time(cutoff_minutes // 60, cutoff_minutes % 60)
+        if decision_time.time() >= cutoff:
+            continue
+
         df1 = one.iloc[: i + 1]
         df5 = five.loc[five.index < decision_time.floor("5min")]
 
@@ -171,6 +190,16 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
         )
         trade = _resolve_trade(trade, one.iloc[i + 1 :])
         trades.append(trade)
+
+        # Keep the next decision outside the active trade window. For an expired
+        # trade there is no exit timestamp, so use the configured expiry window.
+        if trade.exit_time:
+            blocked_until = pd.Timestamp(trade.exit_time)
+        else:
+            blocked_until = pd.Timestamp(entry_time) + pd.to_timedelta(
+                settings.signal_expiry_minutes, unit="min"
+            )
+
         last_signal_bar = decision_time
         last_direction = direction
 
