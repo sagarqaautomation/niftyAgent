@@ -709,6 +709,22 @@ def main() -> None:
                         if not result:
                             continue
                         direction = result["signal"]
+
+                        # Do not alert on setups that cannot reasonably complete
+                        # before the NSE session closes. Keep this aligned with the
+                        # backtester so live and historical behavior use the same
+                        # end-of-day cutoff.
+                        session_end_minutes = 15 * 60 + 30
+                        cutoff_minutes = session_end_minutes - int(settings.signal_expiry_minutes)
+                        signal_cutoff = datetime_time(cutoff_minutes // 60, cutoff_minutes % 60)
+                        if closed_timestamp.time() >= signal_cutoff:
+                            update_analysis_status(
+                                "BLOCKED",
+                                result.get("technical_score"),
+                                "New signal blocked because the remaining NSE session is shorter than the configured signal expiry window.",
+                            )
+                            continue
+
                         if direction == "WAIT":
                             setup_reset_count += 1
                             if setup_reset_count >= quality.setup_reset_bars:
