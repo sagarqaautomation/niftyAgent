@@ -2,7 +2,8 @@ from typing import Any
 
 import pandas as pd
 
-from config import settings\nfrom accuracy_config import quality_settings as quality
+from config import settings
+from accuracy_config import quality_settings as quality
 from indicators import candle_strength, detect_latest_candlestick_patterns
 
 
