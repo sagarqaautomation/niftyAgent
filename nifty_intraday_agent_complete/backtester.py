@@ -129,7 +129,12 @@ def _session_cutoff() -> datetime_time:
     return datetime_time(cutoff_minutes // 60, cutoff_minutes % 60)
 
 
-def run_backtest(frame: pd.DataFrame, probability_model: dict[str, Any] | None = None) -> dict[str, Any]:
+def run_backtest(
+    frame: pd.DataFrame,
+    probability_model: dict[str, Any] | None = None,
+    label: str | None = None,
+    progress: bool = False,
+) -> dict[str, Any]:
     minute = frame.copy()
     one = add_indicators(minute)
     five = add_indicators(_resample_5m(minute))
@@ -149,8 +154,8 @@ def run_backtest(frame: pd.DataFrame, probability_model: dict[str, Any] | None =
         if decision_time.time() >= cutoff:
             continue
 
-        df1 = one.iloc[: i + 1]
-        df5 = five.loc[five.index < decision_time.floor("5min")]
+        # Indicators are precomputed, so use bounded history to avoid an O(n²) hotspot.
+        df1 = one.iloc[max(0, i - 1000) : i + 1]\n        df5 = five.loc[five.index < decision_time.floor("5min")].tail(300)
 
         if len(df5) < 40:
             continue
@@ -275,7 +280,7 @@ def run_backtest(frame: pd.DataFrame, probability_model: dict[str, Any] | None =
     }
 
 
-def walk_forward(frame: pd.DataFrame, folds: int = 5) -> list[dict[str, Any]]:
+def walk_forward(frame: pd.DataFrame, folds: int = 5, progress: bool = False) -> list[dict[str, Any]]:
     if folds < 2:
         raise ValueError("folds must be >= 2")
 
@@ -286,18 +291,32 @@ def walk_forward(frame: pd.DataFrame, folds: int = 5) -> list[dict[str, Any]]:
     ]
 
     results: list[dict[str, Any]] = []
+    total_folds = len(chunks) - 1
     for i in range(1, len(chunks)):
         train = pd.concat(chunks[:i])
         validation = chunks[i]
-        baseline = run_backtest(validation)
-        train_report = run_backtest(train)
+
+        def log(message: str) -> None:
+            if progress:
+                print(message, flush=True)
+
+        log(f"\n[Fold {i}/{total_folds}] train={len(train):,} rows, validation={len(validation):,} rows")
+        log(f"[Fold {i}/{total_folds}] Running validation baseline...")
+        baseline = run_backtest(validation, label=f"fold-{i}-baseline")
+        log(f"[Fold {i}/{total_folds}] Baseline complete: {baseline.get('signals', 0)} signals, {baseline.get('win_rate_percent')}% win rate")
+
+        log(f"[Fold {i}/{total_folds}] Building training trade history...")
+        train_report = run_backtest(train, label=f"fold-{i}-train")
+        log(f"[Fold {i}/{total_folds}] Fitting probability model...")
         model = fit_probability_model(train_report["trades"])
+        log(f"[Fold {i}/{total_folds}] Model fitted: {model.get('samples', 0)} labeled trades")
+
+        log(f"[Fold {i}/{total_folds}] Running probability-filtered validation...")
 
         def metrics(report: dict[str, Any]) -> dict[str, Any]:
             return {key: value for key, value in report.items() if key != "trades"}
 
-        filtered = run_backtest(validation, probability_model=model)
-        results.append(
+        filtered = run_backtest(validation, probability_model=model, label=f"fold-{i}-filtered")\n        log(f"[Fold {i}/{total_folds}] Filtered complete: {filtered.get('signals', 0)} signals, {filtered.get('win_rate_percent')}% win rate")\n        results.append(
             {
                 "fold": i,
                 "train_start": train.index[0].isoformat(),
@@ -328,16 +347,16 @@ def main() -> None:
         help="OHLCV CSV with timestamp,open,high,low,close,volume",
     )
     parser.add_argument("--folds", type=int, default=5)
-    parser.add_argument("--walk-forward", action="store_true")
+    parser.add_argument("--walk-forward", action="store_true")\n    parser.add_argument("--progress", action="store_true", help="print fold progress while running")
     parser.add_argument("--fit-profiles", help="legacy exact setup profile output (kept for compatibility)")
     parser.add_argument("--fit-probability-model", help="write broad feature probability model from this backtest")
     args = parser.parse_args()
 
     frame = load_ohlcv_csv(args.csv)
     result = (
-        walk_forward(frame, args.folds)
+        walk_forward(frame, args.folds, progress=args.progress)
         if args.walk_forward
-        else run_backtest(frame)
+        else run_backtest(frame, progress=args.progress)
     )
     if args.fit_probability_model and not args.walk_forward:
         model = fit_probability_model(result["trades"])
