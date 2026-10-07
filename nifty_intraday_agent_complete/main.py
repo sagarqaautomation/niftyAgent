@@ -47,7 +47,7 @@ def refresh_news() -> str:
     items: list[NewsItem] = cast(list[NewsItem], fetch_all())
     for item in items:
         insert_news(item)
-    return cast(str, aggregate_news(items))
+    return cast(str, aggregate_news(items, settings.news_max_age_minutes))
 
 def candle_record(
     timeframe: str,
