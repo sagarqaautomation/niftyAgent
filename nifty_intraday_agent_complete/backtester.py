@@ -339,12 +339,6 @@ def main() -> None:
         if args.walk_forward
         else run_backtest(frame)
     )
-    if args.fit_profiles and not args.walk_forward:
-        profiles = build_setup_profiles([Trade(**trade) for trade in result["trades"]])
-        output = Path(args.fit_profiles)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(profiles, indent=2), encoding="utf-8")
-        result["setup_profiles_path"] = str(output)
     if args.fit_probability_model and not args.walk_forward:
         model = fit_probability_model(result["trades"])
         save_model(model, args.fit_probability_model)
