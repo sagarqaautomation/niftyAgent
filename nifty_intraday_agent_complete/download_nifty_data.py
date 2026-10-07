@@ -18,10 +18,11 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
-from kiteconnect import KiteConnect
+from kiteconnect import KiteConnect  # pyright: ignore[reportMissingTypeStubs]
 
 load_dotenv()
 
@@ -48,11 +49,11 @@ def market_window(day: datetime) -> tuple[datetime, datetime]:
 
 
 def fetch_chunk(
-    kite: KiteConnect,
+    kite: Any,
     token: int,
     start: datetime,
     end: datetime,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     candles = kite.historical_data(
         instrument_token=token,
         from_date=start,
@@ -84,10 +85,11 @@ def download(
             "Use the same credentials already configured for NiftyAgent."
         )
 
-    kite = KiteConnect(api_key=api_key)
+    kite_factory: Any = KiteConnect
+    kite: Any = kite_factory(api_key=api_key)
     kite.set_access_token(access_token)
 
-    all_rows: list[dict] = []
+    all_rows: list[dict[str, Any]] = []
     cursor = start_date
 
     while cursor.date() <= end_date.date():
