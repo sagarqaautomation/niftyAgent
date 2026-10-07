@@ -16,7 +16,7 @@ from typing import Any
 
 import pandas as pd
 
-from config import settings
+from config import settings\nfrom accuracy_config import quality_settings as quality
 from indicators import add_indicators
 from signal_engine import add_risk_levels, build_signal
 
@@ -119,7 +119,7 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
     reset_bars = 0
 
     # The signal at bar i is evaluated after bar i closes and entered at i+1 open.
-    for i in range(max(60, settings.minimum_history_bars), len(one) - 1):
+    for i in range(max(60, quality.minimum_history_bars), len(one) - 1):
         decision_time = one.index[i]
         df1 = one.iloc[: i + 1]
         df5 = five.loc[five.index < decision_time.floor("5min")]
@@ -132,7 +132,7 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
 
         if direction == "WAIT":
             reset_bars += 1
-            if reset_bars >= settings.setup_reset_bars:
+            if reset_bars >= quality.setup_reset_bars:
                 last_direction = None
             continue
 
@@ -140,7 +140,7 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
         if direction == last_direction:
             continue
         if last_signal_bar is not None and decision_time - last_signal_bar < pd.Timedelta(
-            minutes=settings.signal_cooldown_minutes
+            minutes=quality.signal_cooldown_minutes
         ):
             continue
 
