@@ -129,7 +129,12 @@ def _session_cutoff() -> datetime_time:
     return datetime_time(cutoff_minutes // 60, cutoff_minutes % 60)
 
 
-def run_backtest(\n    frame: pd.DataFrame,\n    probability_model: dict[str, Any] | None = None,\n    label: str | None = None,\n    progress: bool = False,\n) -> dict[str, Any]:
+def run_backtest(
+    frame: pd.DataFrame,
+    probability_model: dict[str, Any] | None = None,
+    label: str | None = None,
+    progress: bool = False,
+) -> dict[str, Any]:
     minute = frame.copy()
     one = add_indicators(minute)
     five = add_indicators(_resample_5m(minute))
@@ -149,7 +154,8 @@ def run_backtest(\n    frame: pd.DataFrame,\n    probability_model: dict[str, An
         if decision_time.time() >= cutoff:
             continue
 
-        # Indicators are precomputed, so use bounded history to avoid an O(n²) hotspot.\n        df1 = one.iloc[max(0, i - 1000) : i + 1]\n        df5 = five.loc[five.index < decision_time.floor("5min")].tail(300)
+        # Indicators are precomputed, so use bounded history to avoid an O(n²) hotspot.
+        df1 = one.iloc[max(0, i - 1000) : i + 1]\n        df5 = five.loc[five.index < decision_time.floor("5min")].tail(300)
 
         if len(df5) < 40:
             continue
