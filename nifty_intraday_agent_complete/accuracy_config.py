@@ -12,6 +12,10 @@ def _float(name: str, default: float) -> float:
     return float(os.getenv(name, str(default)))
 
 
+def _bool(name: str, default: bool) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class QualitySettings:
     minimum_history_bars: int = _int("MINIMUM_HISTORY_BARS", 60)
@@ -26,6 +30,14 @@ class QualitySettings:
     signal_cooldown_minutes: int = _int("SIGNAL_COOLDOWN_MINUTES", 5)
     setup_reset_bars: int = _int("SETUP_RESET_BARS", 3)
     news_max_age_minutes: int = _int("NEWS_MAX_AGE_MINUTES", 60)
+
+    # Precision-first mode deliberately trades frequency for selectivity.
+    precision_mode: bool = _bool("PRECISION_MODE", True)
+    precision_min_score: int = _int("PRECISION_MIN_SCORE", 8)
+    precision_min_adx: float = _float("PRECISION_MIN_ADX", 25.0)
+    precision_require_structure: bool = _bool("PRECISION_REQUIRE_STRUCTURE", True)
+    precision_require_candle: bool = _bool("PRECISION_REQUIRE_CANDLE", True)
+    precision_require_rsi: bool = _bool("PRECISION_REQUIRE_RSI", True)
 
 
 quality_settings = QualitySettings()
