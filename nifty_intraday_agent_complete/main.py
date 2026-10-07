@@ -420,7 +420,8 @@ def main() -> None:
     last_resolved_spot_minute = None
     latest_future_price = None
     latest_future_time = None
-    last_alert_direction: str | None = None\n    last_alert_bar: pd.Timestamp | None = None\n    setup_reset_count = 0
+    last_alert_direction: str | None = None
+    last_alert_bar: pd.Timestamp | None = None\n    setup_reset_count = 0
 
     def on_status(state: str, detail: str | None = None) -> None:
         update_market_status(
