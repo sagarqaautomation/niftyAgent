@@ -129,7 +129,7 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
         if len(df5) < 40:
             continue
 
-        signal = build_signal(df1, df5, "NEUTRAL", "NEUTRAL")
+        signal = build_signal(df1, df5, "NEUTRAL", "NEUTRAL", use_volume_confirmation=False)
         direction = signal["signal"]
 
         if direction == "WAIT":
