@@ -91,12 +91,12 @@ def _resolve_trade(trade: Trade, future: pd.DataFrame) -> Trade:
 
         if target_hit and stop_hit:
             trade.status = "AMBIGUOUS"
-            trade.exit_time = timestamp.isoformat()
+            trade.exit_time = pd.Timestamp(timestamp).isoformat()
             trade.exit_price = float(bar["close"])
             return trade
         if target_hit:
             trade.status = "SUCCESS"
-            trade.exit_time = timestamp.isoformat()
+            trade.exit_time = pd.Timestamp(timestamp).isoformat()
             trade.exit_price = float(trade.target)
             trade.r_multiple = abs(trade.target - trade.entry) / abs(
                 trade.entry - trade.stop
@@ -104,7 +104,7 @@ def _resolve_trade(trade: Trade, future: pd.DataFrame) -> Trade:
             return trade
         if stop_hit:
             trade.status = "FAILED"
-            trade.exit_time = timestamp.isoformat()
+            trade.exit_time = pd.Timestamp(timestamp).isoformat()
             trade.exit_price = float(trade.stop)
             trade.r_multiple = -1.0
             return trade
