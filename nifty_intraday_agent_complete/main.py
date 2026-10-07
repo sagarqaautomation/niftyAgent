@@ -786,7 +786,7 @@ def main() -> None:
                             update_analysis_status(
                                 direction, signal["technical_score"], signal["reason"]
                             )
-                        triggered_direction = direction
+                        last_alert_direction = direction
                         print("SIGNAL:", signal)
 
     broker.on_status(on_status)
