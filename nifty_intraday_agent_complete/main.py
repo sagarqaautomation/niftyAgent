@@ -488,7 +488,7 @@ def main() -> None:
         nonlocal latest_spot_price, latest_spot_time
         nonlocal latest_future_price, latest_future_time
         nonlocal latest_spot_atr, last_resolved_spot_minute
-        nonlocal triggered_direction
+        nonlocal last_alert_direction, last_alert_bar, setup_reset_count
         for tick in ticks:
             tick_token = tick.get("instrument_token")
             equity_symbol = (
