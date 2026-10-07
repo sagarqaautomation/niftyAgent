@@ -134,6 +134,7 @@ def run_backtest(
     probability_model: dict[str, Any] | None = None,
     label: str | None = None,
     progress: bool = False,
+    probability_threshold: float | None = None,
 ) -> dict[str, Any]:
     minute = frame.copy()
     one = add_indicators(minute)
