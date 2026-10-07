@@ -31,8 +31,9 @@ class QualitySettings:
     setup_reset_bars: int = _int("SETUP_RESET_BARS", 3)
     news_max_age_minutes: int = _int("NEWS_MAX_AGE_MINUTES", 60)
 
-    # Precision-first mode deliberately trades frequency for selectivity.
-    precision_mode: bool = _bool("PRECISION_MODE", True)
+    # Experimental strict filter. Keep disabled by default until it proves
+    # an out-of-sample improvement in walk-forward validation.
+    precision_mode: bool = _bool("PRECISION_MODE", False)
     precision_min_score: int = _int("PRECISION_MIN_SCORE", 8)
     precision_min_adx: float = _float("PRECISION_MIN_ADX", 25.0)
     precision_require_structure: bool = _bool("PRECISION_REQUIRE_STRUCTURE", True)
