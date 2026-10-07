@@ -75,6 +75,7 @@ def build_signal(
     df5: pd.DataFrame,
     news_bias: str = "NEUTRAL",
     option_bias: str = "NEUTRAL",
+    use_volume_confirmation: bool = True,
 ) -> dict[str, Any]:
     required_history = max(40, quality.minimum_history_bars)
     if len(df1) < required_history or len(df5) < 40:
@@ -85,7 +86,7 @@ def build_signal(
 
     required = (
         "vwap", "rsi14", "atr14", "adx14", "ema9", "ema21",
-        "ema9_slope", "ema21_slope", "relative_volume20",
+        "ema9_slope", "ema21_slope",
     )
     unavailable = [
         f"{field} is unavailable"
@@ -95,7 +96,8 @@ def build_signal(
     if unavailable:
         return _empty("; ".join(unavailable), "BLOCKED")
 
-    if not df1["volume"].tail(20).gt(0).any():
+    volume_available = bool(df1["volume"].tail(20).gt(0).any())
+    if use_volume_confirmation and not volume_available:
         return _empty("no traded volume in the selected instrument", "BLOCKED")
 
     bull = 0
@@ -152,13 +154,15 @@ def build_signal(
 
     # 4. Relative volume. Baseline excludes the current candle.
     rel_volume = _value(a, "relative_volume20")
-    if rel_volume >= quality.relative_volume_threshold:
+    if use_volume_confirmation and rel_volume >= quality.relative_volume_threshold:
         if close > _value(a, "open"):
             bull += 1
             reasons.append(f"relative volume expansion ({rel_volume:.2f}x)")
         elif close < _value(a, "open"):
             bear += 1
             reasons.append(f"relative volume expansion ({rel_volume:.2f}x)")
+    elif not use_volume_confirmation:
+        reasons.append("volume confirmation disabled for NIFTY spot price-only backtest")
 
     # 5. Price structure.
     structure_bull, structure_bear, structure_reasons = _structure_score(a)
