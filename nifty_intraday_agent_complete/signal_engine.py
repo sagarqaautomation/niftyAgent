@@ -2,7 +2,7 @@ from typing import Any
 
 import pandas as pd
 
-from config import settings
+from config import settings\nfrom accuracy_config import quality_settings as quality
 from indicators import candle_strength, detect_latest_candlestick_patterns
 
 
@@ -34,11 +34,11 @@ def _regime(df5: pd.DataFrame) -> str:
 
     if pd.isna(adx) or pd.isna(ema9_slope) or pd.isna(ema21_slope):
         return "UNKNOWN"
-    if atr_pct >= settings.high_volatility_atr_pct:
+    if atr_pct >= quality.high_volatility_atr_pct:
         return "HIGH_VOLATILITY"
-    if adx >= settings.strong_trend_adx and ema9_slope * ema21_slope > 0:
+    if adx >= quality.strong_trend_adx and ema9_slope * ema21_slope > 0:
         return "TRENDING"
-    if adx >= settings.min_trend_adx:
+    if adx >= quality.min_trend_adx:
         return "TRANSITION"
     return "RANGE"
 
@@ -75,7 +75,7 @@ def build_signal(
     news_bias: str = "NEUTRAL",
     option_bias: str = "NEUTRAL",
 ) -> dict[str, Any]:
-    required_history = max(40, settings.minimum_history_bars)
+    required_history = max(40, quality.minimum_history_bars)
     if len(df1) < required_history or len(df5) < 40:
         return _empty("Not enough candle history")
 
@@ -122,7 +122,7 @@ def build_signal(
         bear += 1
         reasons.append("5m EMA slopes falling")
 
-    if adx >= settings.min_trend_adx:
+    if adx >= quality.min_trend_adx:
         if t_ema9 > t_ema21:
             bull += 1
             reasons.append(f"trend strength confirmed (ADX {adx:.1f})")
@@ -151,7 +151,7 @@ def build_signal(
 
     # 4. Relative volume. Baseline excludes the current candle.
     rel_volume = _value(a, "relative_volume20")
-    if rel_volume >= settings.relative_volume_threshold:
+    if rel_volume >= quality.relative_volume_threshold:
         if close > _value(a, "open"):
             bull += 1
             reasons.append(f"relative volume expansion ({rel_volume:.2f}x)")
@@ -167,7 +167,7 @@ def build_signal(
 
     # 6. Candle quality. Do not give points to a weak/doji candle.
     strength = candle_strength(a)
-    if strength >= settings.minimum_candle_strength:
+    if strength >= quality.minimum_candle_strength:
         if close > _value(a, "open"):
             bull += 1
             reasons.append("strong bullish candle")
@@ -189,10 +189,10 @@ def build_signal(
     regime = _regime(df5)
 
     # Range markets need stronger confirmation than trending markets.
-    if regime == "RANGE" and technical_score < settings.range_market_min_score:
+    if regime == "RANGE" and technical_score < quality.range_market_min_score:
         direction = "WAIT"
         reasons.append(
-            f"range market requires score >= {settings.range_market_min_score}"
+            f"range market requires score >= {quality.range_market_min_score}"
         )
 
     if regime == "UNKNOWN":
@@ -225,10 +225,10 @@ def build_signal(
         reasons.append("strongly conflicting external context")
 
     # High volatility is not automatically bullish/bearish. Require stronger score.
-    if regime == "HIGH_VOLATILITY" and technical_score < settings.high_volatility_min_score:
+    if regime == "HIGH_VOLATILITY" and technical_score < quality.high_volatility_min_score:
         direction = "WAIT"
         reasons.append(
-            f"high-volatility market requires score >= {settings.high_volatility_min_score}"
+            f"high-volatility market requires score >= {quality.high_volatility_min_score}"
         )
 
     total_score = technical_score + context_score
@@ -260,7 +260,7 @@ def add_risk_levels(signal: dict[str, Any]) -> dict[str, Any]:
 
     entry = float(signal["entry_price"])
     risk = float(signal["atr"]) * settings.atr_sl_multiplier
-    rr = max(settings.reward_risk, settings.minimum_reward_risk)
+    rr = max(settings.reward_risk, quality.minimum_reward_risk)
 
     if signal["signal"] == "CALL":
         signal["stop_loss"] = entry - risk
