@@ -7,6 +7,7 @@ import pandas as pd
 from config import settings
 from accuracy_config import quality_settings as quality
 from indicators import candle_strength, detect_latest_candlestick_patterns
+from probability_engine import load_model, predict
 
 
 def _empty(reason: str, state: str = "WARMING_UP") -> dict[str, Any]:
@@ -129,20 +130,13 @@ def _setup_key(direction: str, regime: str, adx: float, rsi: float, rel_volume: 
     return "|".join([direction, regime, adx_bin, rsi_bin, vol_bin, vwap_bin, candle_bin, structure, str(hour)])
 
 
-def _historical_probability(setup_key: str) -> tuple[float | None, int]:
-    if not quality.probability_gate_enabled:
+def _historical_probability(signal_features: dict[str, Any], probability_model: dict[str, Any] | None = None) -> tuple[float | None, int]:
+    if probability_model is None and not quality.probability_gate_enabled:
         return None, 0
-    path = Path(quality.setup_profiles_path)
-    if not path.exists():
+    model = probability_model if probability_model is not None else load_model(quality.setup_profiles_path)
+    if not model:
         return None, 0
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        profile = payload.get("profiles", {}).get(setup_key)
-        if not profile:
-            return None, 0
-        return float(profile.get("lower_bound", profile.get("win_rate", 0.0))), int(profile.get("samples", 0))
-    except (OSError, ValueError, TypeError):
-        return None, 0
+    return predict(model, signal_features)
 
 
 def build_signal(
@@ -151,6 +145,7 @@ def build_signal(
     news_bias: str = "NEUTRAL",
     option_bias: str = "NEUTRAL",
     use_volume_confirmation: bool = True,
+    probability_model: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     required_history = max(40, quality.minimum_history_bars)
     if len(df1) < required_history or len(df5) < 40:
@@ -158,7 +153,6 @@ def build_signal(
 
     a = df1.iloc[-1]
     t = df5.iloc[-1]
-
     required = (
         "vwap", "rsi14", "atr14", "adx14", "ema9", "ema21",
         "ema9_slope", "ema21_slope",
@@ -323,8 +317,13 @@ def build_signal(
     vwap_distance_pct = ((close - vwap) / close * 100) if close and not pd.isna(vwap) else 0.0
     structure = "BULL_BREAKOUT" if structure_bull else "BEAR_BREAKDOWN" if structure_bear else "NONE"
     setup_key = _setup_key(direction, regime, adx, rsi, rel_volume, vwap_distance_pct, strength, structure, int(a.name.hour)) if direction != "WAIT" else None
-    historical_probability, historical_samples = _historical_probability(setup_key) if setup_key else (None, 0)
-    if direction != "WAIT" and quality.probability_gate_enabled:
+    feature_snapshot = {
+        "direction": direction, "regime": regime, "adx": adx, "rsi": rsi,
+        "relative_volume": rel_volume, "vwap_distance_pct": vwap_distance_pct,
+        "candle_strength": strength, "structure": structure, "hour": int(a.name.hour),
+    }
+    historical_probability, historical_samples = _historical_probability(feature_snapshot, probability_model) if direction != "WAIT" else (None, 0)
+    if direction != "WAIT" and (quality.probability_gate_enabled or probability_model is not None):
         if historical_probability is None or historical_samples < quality.probability_min_samples:
             direction = "WAIT"
             reasons.append("no sufficiently sampled historical setup profile")
@@ -343,13 +342,18 @@ def build_signal(
         "option_bias": option_bias,
         "market_regime": regime,
         "adx": adx if not pd.isna(adx) else None,
+        "rsi": rsi if not pd.isna(rsi) else None,
         "relative_volume": rel_volume if not pd.isna(rel_volume) else None,
+        "vwap_distance_pct": vwap_distance_pct,
+        "candle_strength": strength,
+        "structure": structure,
         "pattern_confirmation": patterns,
         "entry_price": close if direction != "WAIT" else None,
         "atr": atr if direction != "WAIT" and not pd.isna(atr) else None,
         "precision_mode": quality.precision_mode,
         "precision_gate_passed": precision_ok,
         "setup_key": setup_key,
+        "probability_features": feature_snapshot,
         "historical_probability": historical_probability,
         "historical_samples": historical_samples,
     }
