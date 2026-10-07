@@ -6,7 +6,8 @@ from typing import Any, cast
 import pandas as pd
 from zoneinfo import ZoneInfo
 
-from config import settings\nfrom accuracy_config import quality_settings as quality
+from config import settings
+from accuracy_config import quality_settings as quality
 from database import (
     init_db, insert_news, insert_candles, insert_spot_candles, insert_signal,
     performance, resolve_with_bar, expire_signals, update_market_status,
