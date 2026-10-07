@@ -155,7 +155,8 @@ def run_backtest(
             continue
 
         # Indicators are precomputed, so use bounded history to avoid an O(n²) hotspot.
-        df1 = one.iloc[max(0, i - 1000) : i + 1]\n        df5 = five.loc[five.index < decision_time.floor("5min")].tail(300)
+        df1 = one.iloc[max(0, i - 1000) : i + 1]
+        df5 = five.loc[five.index < decision_time.floor("5min")].tail(300)
 
         if len(df5) < 40:
             continue
@@ -166,7 +167,8 @@ def run_backtest(
             "NEUTRAL",
             "NEUTRAL",
             use_volume_confirmation=False,
-            probability_model=probability_model,\n            probability_threshold=probability_threshold,
+            probability_model=probability_model,
+            probability_threshold=probability_threshold,
         )
         direction = signal["signal"]
 
