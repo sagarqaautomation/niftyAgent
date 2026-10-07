@@ -360,7 +360,18 @@ def main() -> None:
         help="OHLCV CSV with timestamp,open,high,low,close,volume",
     )
     parser.add_argument("--folds", type=int, default=5)
-    parser.add_argument("--walk-forward", action="store_true")\n    parser.add_argument("--progress", action="store_true", help="print fold progress while running")\n    parser.add_argument("--probability-threshold", type=float, default=0.50, help="minimum modeled win probability for walk-forward filtering")
+    parser.add_argument("--walk-forward", action="store_true")
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="print fold progress while running",
+    )
+    parser.add_argument(
+        "--probability-threshold",
+        type=float,
+        default=0.50,
+        help="minimum modeled win probability for walk-forward filtering",
+    )
     parser.add_argument("--fit-profiles", help="legacy exact setup profile output (kept for compatibility)")
     parser.add_argument("--fit-probability-model", help="write broad feature probability model from this backtest")
     args = parser.parse_args()
