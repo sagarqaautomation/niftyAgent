@@ -38,7 +38,7 @@ def _published_epoch(entry: Any) -> float | None:
     parsed = entry.get("published_parsed") or entry.get("updated_parsed")
     if parsed:
         try:
-            return float(time.mktime(parsed))
+            return float(calendar.timegm(parsed))
         except (TypeError, ValueError, OverflowError):
             pass
     raw = entry.get("published") or entry.get("updated")
