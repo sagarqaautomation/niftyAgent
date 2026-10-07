@@ -146,6 +146,7 @@ def build_signal(
     option_bias: str = "NEUTRAL",
     use_volume_confirmation: bool = True,
     probability_model: dict[str, Any] | None = None,
+    probability_threshold: float | None = None,
 ) -> dict[str, Any]:
     required_history = max(40, quality.minimum_history_bars)
     if len(df1) < required_history or len(df5) < 40:
@@ -327,9 +328,15 @@ def build_signal(
         if historical_probability is None or historical_samples < quality.probability_min_samples:
             direction = "WAIT"
             reasons.append("no sufficiently sampled historical setup profile")
-        elif historical_probability < quality.probability_min_win_rate:
-            direction = "WAIT"
-            reasons.append(f"historical setup probability {historical_probability:.1%} below threshold")
+        else:
+            threshold = (
+                float(probability_threshold)
+                if probability_threshold is not None
+                else quality.probability_min_win_rate
+            )
+            if historical_probability < threshold:
+                direction = "WAIT"
+                reasons.append(f"historical setup probability {historical_probability:.1%} below threshold {threshold:.1%}")
 
     return {
         "signal": direction,
