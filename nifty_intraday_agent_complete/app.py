@@ -127,6 +127,14 @@ def render_overview() -> None:
             f"{perf.get('accuracy_percent')}%"
             if perf.get("accuracy_percent") is not None else "N/A",
         ),
+        (
+            "Average R",
+            perf.get("avg_r") if perf.get("avg_r") is not None else "N/A",
+        ),
+        (
+            "Profit factor",
+            perf.get("profit_factor") if perf.get("profit_factor") is not None else "N/A",
+        ),
     ]
     metric_cols = st.columns(len(metrics))
     for column, (label, value) in zip(metric_cols, metrics):
