@@ -161,12 +161,24 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     volume_for_vwap = volume.replace(0, np.nan)
     if isinstance(df.index, pd.DatetimeIndex):
         sessions = pd.Series(df.index.date, index=df.index)
-        df["vwap"] = (
-            (typical * volume_for_vwap).groupby(sessions).cumsum()
-            / volume_for_vwap.groupby(sessions).cumsum()
+        weighted_volume = volume_for_vwap.groupby(sessions).cumsum()
+        weighted_price = (typical * volume_for_vwap).groupby(sessions).cumsum()
+        df["vwap"] = weighted_price / weighted_volume
+
+        # NIFTY 50 is an index and has no traded volume. For a spot/index
+        # price-only backtest, use a session typical-price mean as the VWAP
+        # proxy instead of producing an all-NaN series. Live futures/equity
+        # feeds continue to use true volume-weighted VWAP.
+        session_typical_mean = typical.groupby(sessions).cumsum() / (
+            pd.Series(1.0, index=df.index).groupby(sessions).cumsum()
         )
+        df["vwap"] = df["vwap"].fillna(session_typical_mean)
     else:
-        df["vwap"] = (typical * volume_for_vwap).cumsum() / volume_for_vwap.cumsum()
+        weighted_volume = volume_for_vwap.cumsum()
+        df["vwap"] = (
+            (typical * volume_for_vwap).cumsum() / weighted_volume
+        )
+        df["vwap"] = df["vwap"].fillna(typical.expanding().mean())
 
     prev_close = close.shift(1)
     tr = pd.concat([
