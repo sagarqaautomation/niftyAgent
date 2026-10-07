@@ -419,7 +419,7 @@ def main() -> None:
     last_resolved_spot_minute = None
     latest_future_price = None
     latest_future_time = None
-    triggered_direction = None
+    last_alert_direction: str | None = None\n    last_alert_bar: pd.Timestamp | None = None\n    setup_reset_count = 0
 
     def on_status(state: str, detail: str | None = None) -> None:
         update_market_status(
@@ -707,13 +707,27 @@ def main() -> None:
                             continue
                         direction = result["signal"]
                         if direction == "WAIT":
-                            triggered_direction = None
+                            setup_reset_count += 1
+                            if setup_reset_count >= settings.setup_reset_bars:
+                                last_alert_direction = None
                             continue
 
-                        if triggered_direction == direction:
+                        setup_reset_count = 0
+                        if last_alert_direction == direction:
                             update_analysis_status(
                                 f"{direction}_TRIGGERED", result["technical_score"],
-                                f"{direction} alert already sent for this setup; waiting for setup reset.",
+                                f"{direction} setup is still active; waiting for a reset before another alert.",
+                            )
+                            continue
+
+                        if (
+                            last_alert_bar is not None
+                            and closed_timestamp - last_alert_bar
+                            < pd.Timedelta(minutes=settings.signal_cooldown_minutes)
+                        ):
+                            update_analysis_status(
+                                "COOLDOWN", result["technical_score"],
+                                f"New {direction} setup blocked by {settings.signal_cooldown_minutes}-minute signal cooldown.",
                             )
                             continue
 
