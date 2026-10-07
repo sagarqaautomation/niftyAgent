@@ -130,10 +130,10 @@ def _setup_key(direction: str, regime: str, adx: float, rsi: float, rel_volume: 
     return "|".join([direction, regime, adx_bin, rsi_bin, vol_bin, vwap_bin, candle_bin, structure, str(hour)])
 
 
-def _historical_probability(signal_features: dict[str, Any]) -> tuple[float | None, int]:
-    if not quality.probability_gate_enabled:
+def _historical_probability(signal_features: dict[str, Any], probability_model: dict[str, Any] | None = None) -> tuple[float | None, int]:
+    if probability_model is None and not quality.probability_gate_enabled:
         return None, 0
-    model = load_model(quality.setup_profiles_path)
+    model = probability_model if probability_model is not None else load_model(quality.setup_profiles_path)
     if not model:
         return None, 0
     return predict(model, signal_features)
