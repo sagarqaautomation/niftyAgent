@@ -37,6 +37,14 @@ class Trade:
     exit_time: str | None
     exit_price: float | None
     r_multiple: float | None
+    setup_key: str | None = None
+    hour: int | None = None
+    adx: float | None = None
+    rsi: float | None = None
+    relative_volume: float | None = None
+    vwap_distance_pct: float | None = None
+    candle_strength: float | None = None
+    structure: str | None = None
 
 
 def load_ohlcv_csv(path: str | Path) -> pd.DataFrame:
@@ -195,6 +203,14 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
             exit_time=None,
             exit_price=None,
             r_multiple=None,
+            setup_key=signal.get("setup_key"),
+            hour=int(decision_time.hour),
+            adx=float(signal["adx"]) if signal.get("adx") is not None else None,
+            rsi=float(one.iloc[i].get("rsi14")) if not pd.isna(one.iloc[i].get("rsi14")) else None,
+            relative_volume=float(signal["relative_volume"]) if signal.get("relative_volume") is not None else None,
+            vwap_distance_pct=((entry_price - float(one.iloc[i]["vwap"])) / entry_price * 100) if not pd.isna(one.iloc[i]["vwap"]) else None,
+            candle_strength=float(one.iloc[i].get("body_pct")) if not pd.isna(one.iloc[i].get("body_pct")) else None,
+            structure=("BULL_BREAKOUT" if not pd.isna(one.iloc[i].get("opening_range_high")) and float(one.iloc[i]["close"]) > float(one.iloc[i]["opening_range_high"]) else "BEAR_BREAKDOWN" if not pd.isna(one.iloc[i].get("opening_range_low")) and float(one.iloc[i]["close"]) < float(one.iloc[i]["opening_range_low"]) else "NONE"),
         )
         trade = _resolve_trade(trade, one.iloc[i + 1 :])
         trades.append(trade)
@@ -299,6 +315,7 @@ def main() -> None:
     )
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--walk-forward", action="store_true")
+    parser.add_argument("--fit-profiles", help="write setup probability profiles from this backtest")
     args = parser.parse_args()
 
     frame = load_ohlcv_csv(args.csv)
@@ -307,6 +324,12 @@ def main() -> None:
         if args.walk_forward
         else run_backtest(frame)
     )
+    if args.fit_profiles and not args.walk_forward:
+        profiles = build_setup_profiles([Trade(**trade) for trade in result["trades"]])
+        output = Path(args.fit_profiles)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(profiles, indent=2), encoding="utf-8")
+        result["setup_profiles_path"] = str(output)
     print(json.dumps(result, indent=2))
 
 
