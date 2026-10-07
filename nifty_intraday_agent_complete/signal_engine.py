@@ -140,7 +140,7 @@ def _historical_probability(setup_key: str) -> tuple[float | None, int]:
         profile = payload.get("profiles", {}).get(setup_key)
         if not profile:
             return None, 0
-        return float(profile.get("win_rate", 0.0)), int(profile.get("samples", 0))
+        return float(profile.get("lower_bound", profile.get("win_rate", 0.0))), int(profile.get("samples", 0))
     except (OSError, ValueError, TypeError):
         return None, 0
 
