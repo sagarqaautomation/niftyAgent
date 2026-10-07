@@ -508,11 +508,36 @@ def performance() -> dict[str, int | float | None]:
         ambiguous = conn.execute("SELECT COUNT(*) FROM signals WHERE status='AMBIGUOUS'").fetchone()[0]
         resolved = wins + losses
         accuracy = round(wins / resolved * 100, 2) if resolved else None
+
+        outcome_rows = conn.execute("""
+        SELECT status,entry_price,target_price,stop_loss
+        FROM signals WHERE status IN ('SUCCESS','FAILED')
+        """).fetchall()
+        r_values: list[float] = []
+        gross_profit = 0.0
+        gross_loss = 0.0
+        for status, entry, target, stop in outcome_rows:
+            if not entry or not target or not stop:
+                continue
+            risk = abs(float(entry) - float(stop))
+            if risk <= 0:
+                continue
+            reward = abs(float(target) - float(entry))
+            r_value = reward / risk if status == "SUCCESS" else -1.0
+            r_values.append(r_value)
+            if r_value > 0:
+                gross_profit += r_value
+            else:
+                gross_loss += abs(r_value)
+
+        avg_r = round(sum(r_values) / len(r_values), 4) if r_values else None
+        profit_factor = round(gross_profit / gross_loss, 4) if gross_loss else None
         return {
             "total": total, "calls": calls, "puts": puts,
             "wins": wins, "losses": losses, "expired": expired,
             "ambiguous": ambiguous, "resolved": resolved,
-            "accuracy_percent": accuracy
+            "accuracy_percent": accuracy, "avg_r": avg_r,
+            "profit_factor": profit_factor,
         }
 
 def latest_signal() -> dict[str, Any] | None:
