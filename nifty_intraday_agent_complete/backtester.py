@@ -1,9 +1,8 @@
 """Deterministic historical evaluator for the NiftyAgent signal engine.
 
-The evaluator intentionally enters on the next 1-minute candle open. Signals are
-generated only from candles available at the decision timestamp, which avoids
-look-ahead bias. If both target and stop are touched inside one OHLC bar, the
-outcome is marked AMBIGUOUS rather than assuming an execution order.
+The evaluator enters on the next 1-minute candle open. Signals are generated
+only from candles available at the decision timestamp, avoiding look-ahead bias.
+Only one position is active at a time.
 """
 
 from __future__ import annotations
@@ -11,9 +10,9 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import asdict, dataclass
+from datetime import time as datetime_time
 from pathlib import Path
 from typing import Any
-from datetime import time as datetime_time
 
 import numpy as np
 import pandas as pd
@@ -68,24 +67,25 @@ def _resample_5m(minute: pd.DataFrame) -> pd.DataFrame:
     ).dropna()
 
 
-def _resolve_trade(
-    trade: Trade,
-    future: pd.DataFrame,
-) -> Trade:
+def _resolve_trade(trade: Trade, future: pd.DataFrame) -> Trade:
     if future.empty:
         trade.status = "EXPIRED"
         return trade
 
-    expiry = pd.Timestamp(trade.entry_time) + pd.to_timedelta(settings.signal_expiry_minutes, unit="min")
+    expiry = pd.Timestamp(trade.entry_time) + pd.to_timedelta(
+        settings.signal_expiry_minutes, unit="min"
+    )
     future = future.loc[future.index <= expiry]
 
     for timestamp, bar in future.iterrows():
         target_hit = (
-            bar["high"] >= trade.target if trade.direction == "CALL"
+            bar["high"] >= trade.target
+            if trade.direction == "CALL"
             else bar["low"] <= trade.target
         )
         stop_hit = (
-            bar["low"] <= trade.stop if trade.direction == "CALL"
+            bar["low"] <= trade.stop
+            if trade.direction == "CALL"
             else bar["high"] >= trade.stop
         )
 
@@ -98,7 +98,9 @@ def _resolve_trade(
             trade.status = "SUCCESS"
             trade.exit_time = timestamp.isoformat()
             trade.exit_price = float(trade.target)
-            trade.r_multiple = abs(trade.target - trade.entry) / abs(trade.entry - trade.stop)
+            trade.r_multiple = abs(trade.target - trade.entry) / abs(
+                trade.entry - trade.stop
+            )
             return trade
         if stop_hit:
             trade.status = "FAILED"
@@ -111,6 +113,13 @@ def _resolve_trade(
     return trade
 
 
+def _session_cutoff() -> datetime_time:
+    session_end_minutes = 15 * 60 + 30
+    expiry_minutes = int(settings.signal_expiry_minutes)
+    cutoff_minutes = session_end_minutes - expiry_minutes
+    return datetime_time(cutoff_minutes // 60, cutoff_minutes % 60)
+
+
 def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
     minute = frame.copy()
     one = add_indicators(minute)
@@ -121,24 +130,13 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
     last_direction: str | None = None
     reset_bars = 0
     blocked_until: pd.Timestamp | None = None
+    cutoff = _session_cutoff()
 
-    # The signal at bar i is evaluated after bar i closes and entered at i+1 open.
-    # Only one position may be active at a time. This prevents the historical
-    # evaluator from using future candles to resolve one trade while also opening
-    # another overlapping trade, which would not match a single-position live flow.
     for i in range(max(60, quality.minimum_history_bars), len(one) - 1):
         decision_time = one.index[i]
+
         if blocked_until is not None and decision_time <= blocked_until:
             continue
-
-        # Do not create a new trade when the remaining session is shorter than
-        # the configured signal expiry window. This mirrors live-session risk
-        # controls and prevents end-of-day signals from being artificially
-        # counted as valid setups that cannot realistically complete.
-        session_end = datetime_time(15, 30)
-        expiry_minutes = int(settings.signal_expiry_minutes)
-        cutoff_minutes = session_end.hour * 60 + session_end.minute - expiry_minutes
-        cutoff = datetime_time(cutoff_minutes // 60, cutoff_minutes % 60)
         if decision_time.time() >= cutoff:
             continue
 
@@ -148,7 +146,13 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
         if len(df5) < 40:
             continue
 
-        signal = build_signal(df1, df5, "NEUTRAL", "NEUTRAL", use_volume_confirmation=False)
+        signal = build_signal(
+            df1,
+            df5,
+            "NEUTRAL",
+            "NEUTRAL",
+            use_volume_confirmation=False,
+        )
         direction = signal["signal"]
 
         if direction == "WAIT":
@@ -160,7 +164,11 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
         reset_bars = 0
         if direction == last_direction:
             continue
-        if last_signal_bar is not None and decision_time - last_signal_bar < pd.to_timedelta(quality.signal_cooldown_minutes, unit="min"):
+        if (
+            last_signal_bar is not None
+            and decision_time - last_signal_bar
+            < pd.to_timedelta(quality.signal_cooldown_minutes, unit="min")
+        ):
             continue
 
         entry_time = one.index[i + 1]
@@ -191,8 +199,6 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
         trade = _resolve_trade(trade, one.iloc[i + 1 :])
         trades.append(trade)
 
-        # Keep the next decision outside the active trade window. For an expired
-        # trade there is no exit timestamp, so use the configured expiry window.
         if trade.exit_time:
             blocked_until = pd.Timestamp(trade.exit_time)
         else:
@@ -224,7 +230,8 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
         resolved_regime = bucket["wins"] + bucket["losses"]
         bucket["win_rate"] = (
             round(bucket["wins"] / resolved_regime * 100, 2)
-            if resolved_regime else None
+            if resolved_regime
+            else None
         )
 
     return {
@@ -237,8 +244,13 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
         "win_rate_percent": round(wins / len(resolved) * 100, 2) if resolved else None,
         "average_r": round(sum(r_values) / len(r_values), 4) if r_values else None,
         "profit_factor": (
-            round(sum(r for r in r_values if r > 0) / abs(sum(r for r in r_values if r < 0)), 4)
-            if any(r < 0 for r in r_values) else None
+            round(
+                sum(r for r in r_values if r > 0)
+                / abs(sum(r for r in r_values if r < 0)),
+                4,
+            )
+            if any(r < 0 for r in r_values)
+            else None
         ),
         "by_regime": by_regime,
         "trades": [asdict(t) for t in trades],
@@ -248,37 +260,53 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
 def walk_forward(frame: pd.DataFrame, folds: int = 5) -> list[dict[str, Any]]:
     if folds < 2:
         raise ValueError("folds must be >= 2")
+
     boundaries = np.linspace(0, len(frame), folds + 1, dtype=int)
-    chunks = [frame.iloc[boundaries[i]:boundaries[i + 1]] for i in range(folds)]
+    chunks = [
+        frame.iloc[boundaries[i] : boundaries[i + 1]]
+        for i in range(folds)
+    ]
+
     results: list[dict[str, Any]] = []
     for i in range(1, len(chunks)):
         train = pd.concat(chunks[:i])
         validation = chunks[i]
-        # Current strategy has fixed parameters; the train set is retained in the
-        # report so future parameter fitting can be added without changing the split.
         report = run_backtest(validation)
-        results.append({
-            "fold": i,
-            "train_start": train.index[0].isoformat(),
-            "train_end": train.index[-1].isoformat(),
-            "validation_start": validation.index[0].isoformat(),
-            "validation_end": validation.index[-1].isoformat(),
-            "validation": {
-                key: value for key, value in report.items() if key != "trades"
-            },
-        })
+        results.append(
+            {
+                "fold": i,
+                "train_start": train.index[0].isoformat(),
+                "train_end": train.index[-1].isoformat(),
+                "validation_start": validation.index[0].isoformat(),
+                "validation_end": validation.index[-1].isoformat(),
+                "validation": {
+                    key: value
+                    for key, value in report.items()
+                    if key != "trades"
+                },
+            }
+        )
     return results
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Backtest the NiftyAgent signal engine")
-    parser.add_argument("csv", help="OHLCV CSV with timestamp,open,high,low,close,volume")
+    parser = argparse.ArgumentParser(
+        description="Backtest the NiftyAgent signal engine"
+    )
+    parser.add_argument(
+        "csv",
+        help="OHLCV CSV with timestamp,open,high,low,close,volume",
+    )
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--walk-forward", action="store_true")
     args = parser.parse_args()
 
     frame = load_ohlcv_csv(args.csv)
-    result = walk_forward(frame, args.folds) if args.walk_forward else run_backtest(frame)
+    result = (
+        walk_forward(frame, args.folds)
+        if args.walk_forward
+        else run_backtest(frame)
+    )
     print(json.dumps(result, indent=2))
 
 
