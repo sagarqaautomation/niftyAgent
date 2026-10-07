@@ -70,6 +70,52 @@ def _structure_score(row: pd.Series[Any]) -> tuple[int, int, list[str]]:
     return bull, bear, reasons
 
 
+def _precision_gate(
+    direction: str,
+    regime: str,
+    technical_score: int,
+    adx: float,
+    t_ema9: float,
+    t_ema21: float,
+    t_ema9_slope: float,
+    t_ema21_slope: float,
+    rsi: float,
+    candle_ok: bool,
+    structure_bull: int,
+    structure_bear: int,
+) -> tuple[bool, list[str]]:
+    if not quality.precision_mode or direction == "WAIT":
+        return True, []
+
+    failures: list[str] = []
+    if regime != "TRENDING":
+        failures.append("precision mode requires TRENDING regime")
+    if technical_score < quality.precision_min_score:
+        failures.append(f"precision score must be >= {quality.precision_min_score}")
+    if pd.isna(adx) or adx < quality.precision_min_adx:
+        failures.append(f"precision ADX must be >= {quality.precision_min_adx:g}")
+
+    if direction == "CALL":
+        if not (t_ema9 > t_ema21 and t_ema9_slope > 0 and t_ema21_slope > 0):
+            failures.append("5m trend and slopes must all be bullish")
+        if quality.precision_require_rsi and not (52 <= rsi <= 68):
+            failures.append("RSI is not in the bullish confirmation band")
+        if quality.precision_require_structure and structure_bull <= 0:
+            failures.append("no bullish price-structure breakout")
+    else:
+        if not (t_ema9 < t_ema21 and t_ema9_slope < 0 and t_ema21_slope < 0):
+            failures.append("5m trend and slopes must all be bearish")
+        if quality.precision_require_rsi and not (32 <= rsi <= 48):
+            failures.append("RSI is not in the bearish confirmation band")
+        if quality.precision_require_structure and structure_bear <= 0:
+            failures.append("no bearish price-structure breakdown")
+
+    if quality.precision_require_candle and not candle_ok:
+        failures.append("candle strength confirmation is missing")
+
+    return not failures, failures
+
+
 def build_signal(
     df1: pd.DataFrame,
     df5: pd.DataFrame,
@@ -104,7 +150,6 @@ def build_signal(
     bear = 0
     reasons: list[str] = []
 
-    # 1. Higher-timeframe trend.
     t_ema9 = _value(t, "ema9")
     t_ema21 = _value(t, "ema21")
     t_ema9_slope = _value(t, "ema9_slope")
@@ -133,7 +178,6 @@ def build_signal(
             bear += 1
             reasons.append(f"trend strength confirmed (ADX {adx:.1f})")
 
-    # 2. Intraday VWAP alignment.
     close = _value(a, "close")
     vwap = _value(a, "vwap")
     if close > vwap:
@@ -143,7 +187,6 @@ def build_signal(
         bear += 2
         reasons.append("1m price below VWAP")
 
-    # 3. Momentum. Avoid rewarding overextended RSI.
     rsi = _value(a, "rsi14")
     if 52 <= rsi <= 68:
         bull += 1
@@ -152,7 +195,6 @@ def build_signal(
         bear += 1
         reasons.append("RSI supports bearish momentum")
 
-    # 4. Relative volume. Baseline excludes the current candle.
     rel_volume = _value(a, "relative_volume20")
     if use_volume_confirmation and rel_volume >= quality.relative_volume_threshold:
         if close > _value(a, "open"):
@@ -164,15 +206,14 @@ def build_signal(
     elif not use_volume_confirmation:
         reasons.append("volume confirmation disabled for NIFTY spot price-only backtest")
 
-    # 5. Price structure.
     structure_bull, structure_bear, structure_reasons = _structure_score(a)
     bull += structure_bull
     bear += structure_bear
     reasons.extend(structure_reasons)
 
-    # 6. Candle quality. Do not give points to a weak/doji candle.
     strength = candle_strength(a)
-    if strength >= quality.minimum_candle_strength:
+    candle_ok = strength >= quality.minimum_candle_strength
+    if candle_ok:
         if close > _value(a, "open"):
             bull += 1
             reasons.append("strong bullish candle")
@@ -180,7 +221,6 @@ def build_signal(
             bear += 1
             reasons.append("strong bearish candle")
 
-    # 7. Candlestick patterns are confirmation only; never enough on their own.
     patterns = detect_latest_candlestick_patterns(df1)
     bullish_patterns = [p["name"] for p in patterns if p["direction"] == "BULLISH"]
     bearish_patterns = [p["name"] for p in patterns if p["direction"] == "BEARISH"]
@@ -193,12 +233,9 @@ def build_signal(
     direction = "CALL" if bull > bear else "PUT" if bear > bull else "WAIT"
     regime = _regime(df5)
 
-    # Range markets need stronger confirmation than trending markets.
     if regime == "RANGE" and technical_score < quality.range_market_min_score:
         direction = "WAIT"
-        reasons.append(
-            f"range market requires score >= {quality.range_market_min_score}"
-        )
+        reasons.append(f"range market requires score >= {quality.range_market_min_score}")
 
     if regime == "UNKNOWN":
         direction = "WAIT"
@@ -210,7 +247,24 @@ def build_signal(
             f"score {technical_score}/{settings.min_total_score} below required threshold"
         )
 
-    # Context is deliberately a veto/confirmation, not a large directional weight.
+    precision_ok, precision_failures = _precision_gate(
+        direction,
+        regime,
+        technical_score,
+        adx,
+        t_ema9,
+        t_ema21,
+        t_ema9_slope,
+        t_ema21_slope,
+        rsi,
+        candle_ok,
+        structure_bull,
+        structure_bear,
+    )
+    if not precision_ok:
+        direction = "WAIT"
+        reasons.extend(precision_failures)
+
     context_score = 0
     if news_bias == "BULLISH":
         context_score += 1
@@ -229,7 +283,6 @@ def build_signal(
         direction = "WAIT"
         reasons.append("strongly conflicting external context")
 
-    # High volatility is not automatically bullish/bearish. Require stronger score.
     if regime == "HIGH_VOLATILITY" and technical_score < quality.high_volatility_min_score:
         direction = "WAIT"
         reasons.append(
@@ -254,6 +307,8 @@ def build_signal(
         "pattern_confirmation": patterns,
         "entry_price": close if direction != "WAIT" else None,
         "atr": atr if direction != "WAIT" and not pd.isna(atr) else None,
+        "precision_mode": quality.precision_mode,
+        "precision_gate_passed": precision_ok,
     }
 
 
