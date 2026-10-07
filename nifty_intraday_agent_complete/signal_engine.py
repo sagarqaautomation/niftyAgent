@@ -8,6 +8,7 @@ from config import settings
 from accuracy_config import quality_settings as quality
 from indicators import candle_strength, detect_latest_candlestick_patterns
 from probability_engine import load_model, predict
+from trade_quality_engine import evaluate_trade_quality
 
 
 def _empty(reason: str, state: str = "WARMING_UP") -> dict[str, Any]:
@@ -147,6 +148,7 @@ def build_signal(
     use_volume_confirmation: bool = True,
     probability_model: dict[str, Any] | None = None,
     probability_threshold: float | None = None,
+    trade_quality_model: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     required_history = max(40, quality.minimum_history_bars)
     if len(df1) < required_history or len(df5) < 40:
@@ -300,6 +302,22 @@ def build_signal(
         context_score -= 1
     context_score = max(-2, min(2, context_score))
 
+    if direction != "WAIT" and trade_quality_model is not None:
+        quality_trade = {
+            "direction": direction,
+            "regime": regime,
+            "structure": structure,
+            "hour": int(a.name.hour),
+            "score": int(technical_score),
+            "adx": adx if not pd.isna(adx) else None,
+            "rsi": rsi if not pd.isna(rsi) else None,
+        }
+        quality_ok, quality_failures = evaluate_trade_quality(
+            trade_quality_model, quality_trade
+        )
+        if not quality_ok:
+            direction = "WAIT"
+            reasons.extend(quality_failures)
     if direction == "CALL" and context_score <= -2:
         direction = "WAIT"
         reasons.append("strongly conflicting external context")
