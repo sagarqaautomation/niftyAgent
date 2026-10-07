@@ -47,6 +47,7 @@ CANDLE_PATTERN_RULES: tuple[tuple[str, str, int], ...] = (
 
 CandlestickPattern = dict[str, str]
 
+
 def detect_candlestick_pattern_rows(
     df: pd.DataFrame,
 ) -> dict[pd.Timestamp, list[CandlestickPattern]]:
@@ -97,6 +98,7 @@ def detect_candlestick_pattern_rows(
 
     return detected
 
+
 def detect_latest_candlestick_patterns(df: pd.DataFrame) -> list[CandlestickPattern]:
     if df.empty:
         return []
@@ -104,44 +106,115 @@ def detect_latest_candlestick_patterns(df: pd.DataFrame) -> list[CandlestickPatt
     recent_patterns = detect_candlestick_pattern_rows(df.tail(20))
     return recent_patterns.get(latest_timestamp, [])
 
+
+def _prior_day_levels(index: pd.DatetimeIndex, high: pd.Series, low: pd.Series) -> tuple[pd.Series, pd.Series]:
+    session_dates = pd.Series(index.date, index=index)
+    daily_high = high.groupby(session_dates).max()
+    daily_low = low.groupby(session_dates).min()
+    prior_high = session_dates.map(daily_high.shift(1))
+    prior_low = session_dates.map(daily_low.shift(1))
+    prior_high.index = index
+    prior_low.index = index
+    return prior_high, prior_low
+
+
+def _opening_range(index: pd.DatetimeIndex, high: pd.Series, low: pd.Series) -> tuple[pd.Series, pd.Series]:
+    session_dates = pd.Series(index.date, index=index)
+    session_start = pd.Series(index.normalize(), index=index)
+    minutes_from_open = (index - index.normalize() - pd.Timedelta(hours=9, minutes=15)).total_seconds() / 60
+    in_opening_range = pd.Series((minutes_from_open >= 0) & (minutes_from_open < 15), index=index)
+    range_high = high.where(in_opening_range).groupby(session_dates).cummax()
+    range_low = low.where(in_opening_range).groupby(session_dates).cummin()
+    # Freeze the completed first 15-minute range for the rest of the session.
+    completed_high = range_high.groupby(session_dates).ffill()
+    completed_low = range_low.groupby(session_dates).ffill()
+    completed_high = completed_high.where(minutes_from_open >= 15)
+    completed_low = completed_low.where(minutes_from_open >= 15)
+    completed_high.index = index
+    completed_low.index = index
+    return completed_high, completed_low
+
+
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
+    df = df.copy().sort_index()
     if df.empty:
         return df
 
-    df["ema9"] = df["close"].ewm(span=9, adjust=False).mean()
-    df["ema21"] = df["close"].ewm(span=21, adjust=False).mean()
+    close = df["close"].astype(float)
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    open_ = df["open"].astype(float)
+    volume = df["volume"].fillna(0).astype(float)
 
-    delta = df["close"].diff()
+    df["ema9"] = close.ewm(span=9, adjust=False).mean()
+    df["ema21"] = close.ewm(span=21, adjust=False).mean()
+    df["ema9_slope"] = df["ema9"].diff(3)
+    df["ema21_slope"] = df["ema21"].diff(3)
+
+    delta = close.diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
     rs = gain / loss.replace(0, np.nan)
-    df["rsi14"] = 100 - (100 / (1 + rs))
-    df["rsi14"] = df["rsi14"].fillna(50)
+    df["rsi14"] = (100 - (100 / (1 + rs))).fillna(50)
 
-    typical = (df["high"] + df["low"] + df["close"]) / 3
-    volume = df["volume"].replace(0, np.nan)
+    typical = (high + low + close) / 3
+    volume_for_vwap = volume.replace(0, np.nan)
     if isinstance(df.index, pd.DatetimeIndex):
         sessions = pd.Series(df.index.date, index=df.index)
-        df["vwap"] = (typical * volume).groupby(sessions).cumsum() / volume.groupby(sessions).cumsum()
+        df["vwap"] = (
+            (typical * volume_for_vwap).groupby(sessions).cumsum()
+            / volume_for_vwap.groupby(sessions).cumsum()
+        )
     else:
-        df["vwap"] = (typical * volume).cumsum() / volume.cumsum()
+        df["vwap"] = (typical * volume_for_vwap).cumsum() / volume_for_vwap.cumsum()
 
-    prev_close = df["close"].shift(1)
+    prev_close = close.shift(1)
     tr = pd.concat([
-        df["high"] - df["low"],
-        (df["high"] - prev_close).abs(),
-        (df["low"] - prev_close).abs()
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
     ], axis=1).max(axis=1)
     df["atr14"] = tr.rolling(14).mean()
+    df["atr_pct"] = (df["atr14"] / close.replace(0, np.nan)) * 100
+
+    # ADX is deliberately calculated on the same timeframe as the trend decision.
+    df["adx14"] = pd.Series(
+        talib.ADX(high.to_numpy(), low.to_numpy(), close.to_numpy(), timeperiod=14),
+        index=df.index,
+    )
+    df["plus_di14"] = pd.Series(
+        talib.PLUS_DI(high.to_numpy(), low.to_numpy(), close.to_numpy(), timeperiod=14),
+        index=df.index,
+    )
+    df["minus_di14"] = pd.Series(
+        talib.MINUS_DI(high.to_numpy(), low.to_numpy(), close.to_numpy(), timeperiod=14),
+        index=df.index,
+    )
+
+    # Relative volume excludes the current candle to avoid contaminating the baseline.
+    df["relative_volume20"] = volume / volume.shift(1).rolling(20).median().replace(0, np.nan)
+
+    candle_range = (high - low).replace(0, np.nan)
+    df["body_pct"] = (close - open_).abs() / candle_range
+    df["close_location"] = (close - low) / candle_range
+
+    if isinstance(df.index, pd.DatetimeIndex):
+        prior_high, prior_low = _prior_day_levels(df.index, high, low)
+        df["prior_day_high"] = prior_high
+        df["prior_day_low"] = prior_low
+        opening_high, opening_low = _opening_range(df.index, high, low)
+        df["opening_range_high"] = opening_high
+        df["opening_range_low"] = opening_low
 
     return df
+
 
 def candle_strength(row: pd.Series[Any]) -> float:
     rng = row["high"] - row["low"]
     if rng <= 0:
         return 0.0
     return abs(row["close"] - row["open"]) / rng
+
 
 def support_resistance(
     df: pd.DataFrame,
