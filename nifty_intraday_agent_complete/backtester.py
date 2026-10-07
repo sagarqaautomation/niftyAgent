@@ -13,6 +13,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from datetime import time as datetime_time
 
 import numpy as np
 import pandas as pd
@@ -123,6 +124,17 @@ def run_backtest(frame: pd.DataFrame) -> dict[str, Any]:
     # The signal at bar i is evaluated after bar i closes and entered at i+1 open.
     for i in range(max(60, quality.minimum_history_bars), len(one) - 1):
         decision_time = one.index[i]
+        # Do not create a new trade when the remaining session is shorter than
+        # the configured signal expiry window. This mirrors live-session risk
+        # controls and prevents end-of-day signals from being artificially
+        # counted as valid setups that cannot realistically complete.
+        session_end = datetime_time(15, 30)
+        expiry_minutes = int(settings.signal_expiry_minutes)
+        cutoff_minutes = session_end.hour * 60 + session_end.minute - expiry_minutes
+        cutoff = datetime_time(cutoff_minutes // 60, cutoff_minutes % 60)
+        if decision_time.time() >= cutoff:
+            continue
+
         df1 = one.iloc[: i + 1]
         df5 = five.loc[five.index < decision_time.floor("5min")]
 
