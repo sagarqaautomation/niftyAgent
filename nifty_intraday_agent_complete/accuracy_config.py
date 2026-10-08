@@ -29,6 +29,11 @@ class QualitySettings:
     minimum_reward_risk: float = _float("MINIMUM_REWARD_RISK", 1.5)
     signal_cooldown_minutes: int = _int("SIGNAL_COOLDOWN_MINUTES", 5)
     setup_reset_bars: int = _int("SETUP_RESET_BARS", 3)
+    # Targeted v2.1 loss-cluster hypothesis: transition regimes are the
+    # weakest recurring regime, so require directional movement agreement
+    # before allowing a transition CALL/PUT. Keep disabled until walk-forward
+    # validation proves a positive out-of-sample improvement.
+    transition_require_di_alignment: bool = _bool("TRANSITION_REQUIRE_DI_ALIGNMENT", False)
     news_max_age_minutes: int = _int("NEWS_MAX_AGE_MINUTES", 60)
     probability_gate_enabled: bool = _bool("PROBABILITY_GATE_ENABLED", False)
     probability_min_win_rate: float = _float("PROBABILITY_MIN_WIN_RATE", 0.60)
