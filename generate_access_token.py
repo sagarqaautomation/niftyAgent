@@ -1,6 +1,7 @@
 import os
 from getpass import getpass
 from pathlib import Path
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parent
 PROJECT_DIR = ROOT / "nifty_intraday_agent_complete"
@@ -14,7 +15,7 @@ except ImportError as exc:
     ) from exc
 
 try:
-    from kiteconnect import KiteConnect
+    from kiteconnect import KiteConnect  # type: ignore[reportMissingTypeStubs]
 except ImportError as exc:
     raise RuntimeError(
         "kiteconnect is missing. Run: '" + str(ROOT / '.venv' / 'Scripts' / 'python.exe') + " -m pip install -r " + str(PROJECT_DIR / 'requirements.txt') + "'"
@@ -34,7 +35,7 @@ if not api_key or not api_secret:
         f"Expected: {ENV_FILE}"
     )
 
-kite = KiteConnect(api_key=api_key)
+kite: Any = KiteConnect(api_key=api_key)
 
 print("Open this Kite Connect login URL in your browser and sign in:")
 print(kite.login_url())
@@ -44,7 +45,10 @@ request_token = getpass("Kite request token (input hidden): ").strip()
 if not request_token:
     raise ValueError("Request token cannot be empty")
 
-session = kite.generate_session(request_token, api_secret=api_secret)
+session = cast(
+    dict[str, Any],
+    kite.generate_session(request_token, api_secret=api_secret),
+)
 updated, _, _ = set_key(
     ENV_FILE, "KITE_ACCESS_TOKEN", session["access_token"], quote_mode="never"
 )

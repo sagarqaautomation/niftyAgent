@@ -120,7 +120,6 @@ def _prior_day_levels(index: pd.DatetimeIndex, high: pd.Series, low: pd.Series) 
 
 def _opening_range(index: pd.DatetimeIndex, high: pd.Series, low: pd.Series) -> tuple[pd.Series, pd.Series]:
     session_dates = pd.Series(index.date, index=index)
-    session_start = pd.Series(index.normalize(), index=index)
     minutes_from_open = (index - index.normalize() - pd.Timedelta(hours=9, minutes=15)).total_seconds() / 60
     in_opening_range = pd.Series((minutes_from_open >= 0) & (minutes_from_open < 15), index=index)
     range_high = high.where(in_opening_range).groupby(session_dates).cummax()

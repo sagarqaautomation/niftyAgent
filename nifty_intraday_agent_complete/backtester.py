@@ -12,7 +12,7 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import time as datetime_time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -77,6 +77,12 @@ def _resample_5m(minute: pd.DataFrame) -> pd.DataFrame:
     ).dropna()
 
 
+def _optional_float(value: Any) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    return float(value)
+
+
 def _resolve_trade(trade: Trade, future: pd.DataFrame) -> Trade:
     if future.empty:
         trade.status = "EXPIRED"
@@ -88,6 +94,7 @@ def _resolve_trade(trade: Trade, future: pd.DataFrame) -> Trade:
     future = future.loc[future.index <= expiry]
 
     for timestamp, bar in future.iterrows():
+        timestamp = cast(pd.Timestamp, timestamp)
         target_hit = (
             bar["high"] >= trade.target
             if trade.direction == "CALL"
@@ -159,7 +166,10 @@ def run_backtest(
 
         # Indicators are precomputed, so use bounded history to avoid an O(n²) hotspot.
         df1 = one.iloc[max(0, i - 1000) : i + 1]
-        df5 = five.loc[five.index < decision_time.floor("5min")].tail(300)
+        eligible_five = np.flatnonzero(
+            five.index < decision_time.floor("5min")
+        )[-300:]
+        df5 = five.iloc[eligible_five]
 
         if len(df5) < 40:
             continue
@@ -219,10 +229,10 @@ def run_backtest(
             setup_key=signal.get("setup_key"),
             hour=int(decision_time.hour),
             adx=float(signal["adx"]) if signal.get("adx") is not None else None,
-            rsi=float(one.iloc[i].get("rsi14")) if not pd.isna(one.iloc[i].get("rsi14")) else None,
+            rsi=_optional_float(one.iloc[i].get("rsi14")),
             relative_volume=float(signal["relative_volume"]) if signal.get("relative_volume") is not None else None,
             vwap_distance_pct=((entry_price - float(one.iloc[i]["vwap"])) / entry_price * 100) if not pd.isna(one.iloc[i]["vwap"]) else None,
-            candle_strength=float(one.iloc[i].get("body_pct")) if not pd.isna(one.iloc[i].get("body_pct")) else None,
+            candle_strength=_optional_float(one.iloc[i].get("body_pct")),
             structure=("BULL_BREAKOUT" if not pd.isna(one.iloc[i].get("opening_range_high")) and float(one.iloc[i]["close"]) > float(one.iloc[i]["opening_range_high"]) else "BEAR_BREAKDOWN" if not pd.isna(one.iloc[i].get("opening_range_low")) and float(one.iloc[i]["close"]) < float(one.iloc[i]["opening_range_low"]) else "NONE"),
         )
         trade = _resolve_trade(trade, one.iloc[i + 1 :])
@@ -399,21 +409,31 @@ def main() -> None:
         default=0.50,
         help="minimum modeled win probability for walk-forward filtering",
     )
-    parser.add_argument("--fit-profiles", help="legacy exact setup profile output (kept for compatibility)")
-    parser.add_argument("--fit-probability-model", help="write broad feature probability model from this backtest")
+    parser.add_argument(
+        "--fit-probability-model",
+        "--fit-profiles",
+        dest="fit_probability_model",
+        help="write a broad feature probability model (--fit-profiles is a legacy alias)",
+    )
     args = parser.parse_args()
+    if args.fit_probability_model and args.walk_forward:
+        parser.error("--fit-probability-model cannot be combined with --walk-forward")
 
     frame = load_ohlcv_csv(args.csv)
-    result = (
-        walk_forward(frame, args.folds, progress=args.progress, probability_threshold=args.probability_threshold)
-        if args.walk_forward
-        else run_backtest(frame, progress=args.progress)
-    )
-    if args.fit_probability_model and not args.walk_forward:
-        model = fit_probability_model(result["trades"])
-        save_model(model, args.fit_probability_model)
-        result["probability_model_path"] = str(args.fit_probability_model)
-        result["probability_model_samples"] = model.get("samples", 0)
+    if args.walk_forward:
+        result = walk_forward(
+            frame,
+            args.folds,
+            progress=args.progress,
+            probability_threshold=args.probability_threshold,
+        )
+    else:
+        result = run_backtest(frame, progress=args.progress)
+        if args.fit_probability_model:
+            model = fit_probability_model(result["trades"])
+            save_model(model, args.fit_probability_model)
+            result["probability_model_path"] = str(args.fit_probability_model)
+            result["probability_model_samples"] = model.get("samples", 0)
     print(json.dumps(result, indent=2))
 
 

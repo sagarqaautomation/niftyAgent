@@ -42,11 +42,11 @@ def fit_probability_model(trades: list[dict[str,Any]], min_bucket_samples:int=20
     n=len(resolved); wins=sum(t.get("status")=="SUCCESS" for t in resolved)
     if not n: return {"version":2,"method":"smoothed_additive_log_odds","samples":0,"prior":.5,"features":{}}
     prior=(wins+prior_strength*.5)/(n+prior_strength); base=_logit(prior)
-    features={}
+    features: dict[str, Any] = {}
     for name in FEATURE_NAMES:
-        groups={}
+        groups: dict[str, list[int]] = {}
         for t in resolved: groups.setdefault(_bucket(t)[name],[]).append(1 if t.get("status")=="SUCCESS" else 0)
-        out={}
+        out: dict[str, dict[str, int | float]] = {}
         for key, vals in groups.items():
             count=len(vals)
             if count<min_bucket_samples: continue

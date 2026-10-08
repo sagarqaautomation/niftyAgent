@@ -1,5 +1,7 @@
-from collections import defaultdict
-from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from datetime import datetime
+from typing import Any
+
 import pandas as pd
 from config import settings
 from indicators import add_indicators
@@ -7,23 +9,29 @@ from indicators import add_indicators
 class CandleEngine:
     """Converts ticks into minute candles and maintains 1m/5m DataFrames."""
 
-    def __init__(self, max_rows=500):
-        self.ticks = []
+    def __init__(self, max_rows: int = 500) -> None:
+        self.ticks: list[dict[str, Any]] = []
         self.max_rows = max_rows
         self.history = pd.DataFrame()
-        self.frames = {"1min": pd.DataFrame(), "5min": pd.DataFrame()}
+        self.frames: dict[str, pd.DataFrame] = {
+            "1min": pd.DataFrame(),
+            "5min": pd.DataFrame(),
+        }
 
-    def load_history(self, candles):
+    def load_history(
+        self, candles: Sequence[Mapping[str, Any]]
+    ) -> dict[str, pd.DataFrame]:
         if not candles:
             return self.frames
 
         history = pd.DataFrame(candles).rename(columns={"date": "timestamp"})
         history["timestamp"] = pd.to_datetime(history["timestamp"])
         history = history.set_index("timestamp")
-        if history.index.tz is None:
-            history.index = history.index.tz_localize(settings.market_timezone)
+        history_index = pd.DatetimeIndex(history.index)
+        if history_index.tz is None:
+            history.index = history_index.tz_localize(settings.market_timezone)
         else:
-            history.index = history.index.tz_convert(settings.market_timezone)
+            history.index = history_index.tz_convert(settings.market_timezone)
 
         if "volume" not in history:
             history["volume"] = 0
@@ -35,7 +43,7 @@ class CandleEngine:
         self._update_frames(self.history)
         return self.frames
 
-    def _update_frames(self, minute):
+    def _update_frames(self, minute: pd.DataFrame) -> None:
         if minute.empty:
             self.frames = {"1min": pd.DataFrame(), "5min": pd.DataFrame()}
             return
@@ -50,7 +58,12 @@ class CandleEngine:
         ).dropna()
         self.frames["5min"] = add_indicators(five.tail(self.max_rows))
 
-    def add_tick(self, timestamp, price, volume=0):
+    def add_tick(
+        self,
+        timestamp: pd.Timestamp | datetime | str,
+        price: float,
+        volume: float = 0,
+    ) -> dict[str, pd.DataFrame] | None:
         timestamp = pd.Timestamp(timestamp)
         if timestamp.tzinfo is None:
             timestamp = timestamp.tz_localize(settings.market_timezone)

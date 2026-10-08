@@ -1,6 +1,4 @@
-from pathlib import Path
-import json
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -156,6 +154,7 @@ def build_signal(
 
     a = df1.iloc[-1]
     t = df5.iloc[-1]
+    signal_hour = cast(pd.Timestamp, df1.index[-1]).hour
     required = (
         "vwap", "rsi14", "atr14", "adx14", "ema9", "ema21",
         "ema9_slope", "ema21_slope",
@@ -320,11 +319,11 @@ def build_signal(
     vwap_distance_pct = ((close - vwap) / close * 100) if close and not pd.isna(vwap) else 0.0
     structure = "BULL_BREAKOUT" if structure_bull else "BEAR_BREAKDOWN" if structure_bear else "NONE"
     if direction != "WAIT" and trade_quality_model is not None:
-        quality_trade = {
+        quality_trade: dict[str, Any] = {
             "direction": direction,
             "regime": regime,
             "structure": structure,
-            "hour": int(a.name.hour),
+            "hour": int(signal_hour),
             "score": int(technical_score),
             "adx": adx if not pd.isna(adx) else None,
             "rsi": rsi if not pd.isna(rsi) else None,
@@ -335,11 +334,11 @@ def build_signal(
         if not quality_ok:
             direction = "WAIT"
             reasons.extend(quality_failures)
-    setup_key = _setup_key(direction, regime, adx, rsi, rel_volume, vwap_distance_pct, strength, structure, int(a.name.hour)) if direction != "WAIT" else None
-    feature_snapshot = {
+    setup_key = _setup_key(direction, regime, adx, rsi, rel_volume, vwap_distance_pct, strength, structure, int(signal_hour)) if direction != "WAIT" else None
+    feature_snapshot: dict[str, Any] = {
         "direction": direction, "regime": regime, "adx": adx, "rsi": rsi,
         "relative_volume": rel_volume, "vwap_distance_pct": vwap_distance_pct,
-        "candle_strength": strength, "structure": structure, "hour": int(a.name.hour),
+        "candle_strength": strength, "structure": structure, "hour": int(signal_hour),
     }
     historical_probability, historical_samples = _historical_probability(feature_snapshot, probability_model) if direction != "WAIT" else (None, 0)
     if direction != "WAIT" and (quality.probability_gate_enabled or probability_model is not None):

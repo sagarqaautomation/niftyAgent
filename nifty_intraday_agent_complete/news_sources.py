@@ -1,9 +1,11 @@
+import calendar
 import re
-import time
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-import feedparser
+import feedparser as _feedparser  # type: ignore[reportMissingTypeStubs]
+
+feedparser: Any = _feedparser
 
 NewsItem = dict[str, Any]
 

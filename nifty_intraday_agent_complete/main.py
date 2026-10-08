@@ -45,7 +45,7 @@ def market_session_has_ended(now: datetime | None = None) -> bool:
 def refresh_news() -> str:
     if not settings.news_enabled:
         return "NEUTRAL"
-    items: list[NewsItem] = cast(list[NewsItem], fetch_all())
+    items: list[NewsItem] = fetch_all()
     for item in items:
         insert_news(item)
     return cast(str, aggregate_news(items, quality.news_max_age_minutes))
