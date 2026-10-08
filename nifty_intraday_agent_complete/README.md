@@ -14,7 +14,7 @@ A VS Code-ready Python project for a **research/alert-only** NIFTY intraday moni
 - Resolves signals against subsequent OHLC bars and records accuracy.
 - Persists per-equity 1-minute/5-minute candles and signal-time feature snapshots for replay and model research.
 - Exposes resolved equity outcomes with feature snapshots for offline training-data preparation; no AI model is trained or used yet.
-- Reads market-news RSS feeds such as Moneycontrol and LiveMint.
+- Reads multi-source market RSS headlines and tags matched equity/company context.
 - Sends optional WhatsApp alerts through Twilio.
 - Exposes REST endpoints for ChatGPT/other clients later.
 - Keeps automatic order placement disabled.
@@ -294,20 +294,26 @@ Do not assume an option premium target can be derived safely from NIFTY points w
 
 ## 14. News
 
-Default RSS sources:
+RSS sources:
 
-- Moneycontrol market reports
-- LiveMint markets
+- [Moneycontrol market reports](https://www.moneycontrol.com/rss/marketreports.xml)
+- [LiveMint markets](https://www.livemint.com/rss/markets)
+- [Economic Times markets](https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms)
+- [Business Standard markets](https://www.business-standard.com/rss/markets-106.rss)
 
-News is treated as context, not as the sole trade trigger.
+Headlines are tagged heuristically as earnings, company announcements, analyst actions, sector news, or market/macro news. The worker matches headlines against broker-provided company names and trading symbols, then applies fresh company-specific and market/macro context to equity signals. The NIFTY signal continues to use market-wide news context.
 
 The code stores:
 - source
 - headline
 - URL
 - published time
-- simple sentiment
-- market bias
+- summary
+- simple sentiment and market bias
+- event categories
+- matched equity symbols
+
+The equity replay uses stored articles only at or after their recorded `fetched_at` time and within the configured freshness window. These feeds do not provide a complete six-month stock-specific news archive, so older candles without archived headlines remain neutral; live RSS headlines are never retroactively applied to earlier candles.
 
 Respect each source's terms, robots rules, RSS/API conditions and copyright restrictions. Do not scrape/copy full articles.
 
@@ -459,6 +465,20 @@ python backtester.py data/nifty_1m.csv --walk-forward --folds 5
 
 The first run validates the price/structure engine. Before using the result to claim V2.1 accuracy, add a historical futures-volume source so the volume gate is evaluated with real data.
 
+### Equity signal-history download
+
+To download six calendar months of 1-minute candles for the distinct stock symbols that generated equity signals today, run from the project directory:
+
+    python download_equity_history.py --months 6
+
+The downloader uses the existing Kite credentials, requests at most 30 calendar days per chunk, and writes one file per symbol under `data/equity_history_6m/` plus a `manifest.json`. Existing files are skipped unless `--overwrite` is supplied. Check the manifest for missing instruments, empty histories, or API failures before using the files for analysis.
+
+Replay the live equity scanner across chronological validation folds with:
+
+    python equity_backtester.py --data-dir data/equity_history_6m --scores 7 8 9 --folds 4 --progress
+
+This writes `equity_backtest_summary.json` and `equity_backtest_trades.csv` in the data directory. Round-trip costs default to zero; supply a justified `--round-trip-cost-bps` value before interpreting net returns. The replay uses neutral historical news, enters at the next minute open, and excludes incomplete sessions and the first five warm-up dates.
+
 ## v2.1 accuracy engine
 
 The v2.1 branch adds quality gates intended to reduce false positives before any live trading use:
@@ -485,8 +505,11 @@ Run from the project directory:
 
     python backtester.py data/nifty_1m.csv
     python backtester.py data/nifty_1m.csv --walk-forward --folds 5
+    python backtester.py data/nifty_1m.csv --walk-forward --folds 5 --score-sweep 7 8 9 --round-trip-cost-points 2 --progress
 
 The evaluator generates the signal only after a closed candle and enters at the next 1-minute candle open. If both target and stop are touched inside one OHLC candle, it records AMBIGUOUS instead of assuming which one was hit first.
+
+The score sweep reports each fixed technical-score threshold separately on every validation fold. Round-trip costs are supplied in price points and default to zero; replace the example value with a realistic estimate for the instrument and execution method. Gross `average_r` and `profit_factor` remain available alongside `net_average_r` and `net_profit_factor`.
 
 Do not optimize parameters on the same period used for the final performance claim. Use the walk-forward validation output to judge whether improvements survive unseen periods.
 

@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from config import settings
+from market_hours import is_market_open
 from database import (
     init_db, performance, latest_signal, list_signals, list_news, list_spot_candles,
     get_market_status, list_equity_signals_by_status, equity_signal_performance,
@@ -34,6 +35,7 @@ def _seconds_since(value: str | None, default_timezone: tzinfo) -> float | None:
 def render_live_status() -> None:
     feed = get_market_status()
     feed_state = feed.get("state", "WAITING") if feed else "WAITING"
+    market_open = is_market_open()
     tick_age = _seconds_since(feed.get("last_tick_at"), timezone.utc) if feed else None
     spot_age = (
         _seconds_since(feed.get("spot_last_tick_at"), ZoneInfo(settings.market_timezone))
@@ -51,13 +53,13 @@ def render_live_status() -> None:
 
     status_cols = st.columns(4)
     status_delta = (
-        "Session closed"
-        if feed_state == "CLOSED"
-        else f"{tick_age:.0f}s since tick" if tick_age is not None else "No tick recorded"
-    )
+        f"Feed {feed_state} · {tick_age:.0f}s since tick"
+        if tick_age is not None
+        else f"Feed {feed_state}"
+    ) if market_open else "Weekdays 09:00-15:30 IST"
     status_cols[0].metric(
-        "Market feed",
-        feed_state,
+        "NSE market",
+        "LIVE" if market_open else "CLOSED",
         status_delta,
         delta_color="off",
     )
@@ -71,19 +73,21 @@ def render_live_status() -> None:
     )
     status_cols[3].metric("Last spot candle", str(candle_time or "No spot candle"))
 
-    if feed and feed_state in {"ERROR", "DISCONNECTED"}:
+    if not market_open:
+        st.info("NSE market is closed. Session hours: weekdays 09:00-15:30 IST.")
+    elif feed and feed_state in {"ERROR", "DISCONNECTED"}:
         st.error(feed.get("last_error") or f"Market feed {feed_state.lower()}.")
     elif feed_state == "CLOSED":
-        st.info("NSE session closed; live market data has been stopped.")
+        st.info("NSE session is open, but the live market-data feed is stopped.")
     elif feed_state == "LIVE" and tick_age is not None and tick_age > 10:
         st.warning(f"Market feed is stale; last tick was {tick_age:.0f} seconds ago.")
     elif feed_state in {"STARTING", "CONNECTED"}:
         st.info(f"Market feed {feed_state.lower()}.")
     if feed and feed.get("last_error") and feed_state not in {"ERROR", "DISCONNECTED"}:
         st.warning(f"Market data notice: {feed['last_error']}")
-    if feed_state != "CLOSED" and candle_age is not None and candle_age > 120:
+    if market_open and candle_age is not None and candle_age > 120:
         st.warning(f"Latest stored NIFTY spot candle is stale by {candle_age / 60:.1f} minutes.")
-    if feed_state != "CLOSED" and spot_age is not None and spot_age > 10:
+    if market_open and spot_age is not None and spot_age > 10:
         st.warning(f"NIFTY spot reference is stale ({spot_age:.0f}s old).")
 
     analysis_state = feed.get("analysis_state") if feed else None
@@ -93,20 +97,21 @@ def render_live_status() -> None:
         f" · score {analysis_score}/{settings.min_total_score}"
         if analysis_score is not None else ""
     )
-    if analysis_state in {"CALL", "PUT"}:
-        st.success(f"Latest NIFTY evaluation: {analysis_state}{score_text} · {analysis_reason}")
-    elif analysis_state in {"BLOCKED", "ERROR"}:
-        st.error(f"Signal analysis {analysis_state.lower()}: {analysis_reason}")
-    elif analysis_state and analysis_state.endswith("_ALERT_NOT_SENT"):
-        st.info(f"{analysis_state.split('_', 1)[0]} signal was saved. See the Signals tab.")
-    elif analysis_state in {"CALL_TRIGGERED", "PUT_TRIGGERED"}:
-        st.info(f"{analysis_state.removesuffix('_TRIGGERED')} setup already triggered; waiting for reset.")
-    elif analysis_state == "WARMING_UP":
-        st.info(f"Signal analysis warming up: {analysis_reason}")
-    elif analysis_state == "CLOSED":
-        st.info(analysis_reason or "NSE session closed.")
-    elif analysis_state:
-        st.info(f"Latest NIFTY evaluation: {analysis_state}{score_text} · {analysis_reason}")
+    if market_open:
+        if analysis_state in {"CALL", "PUT"}:
+            st.success(f"Latest NIFTY evaluation: {analysis_state}{score_text} · {analysis_reason}")
+        elif analysis_state in {"BLOCKED", "ERROR"}:
+            st.error(f"Signal analysis {analysis_state.lower()}: {analysis_reason}")
+        elif analysis_state and analysis_state.endswith("_ALERT_NOT_SENT"):
+            st.info(f"{analysis_state.split('_', 1)[0]} signal was saved. See the Signals tab.")
+        elif analysis_state in {"CALL_TRIGGERED", "PUT_TRIGGERED"}:
+            st.info(f"{analysis_state.removesuffix('_TRIGGERED')} setup already triggered; waiting for reset.")
+        elif analysis_state == "WARMING_UP":
+            st.info(f"Signal analysis warming up: {analysis_reason}")
+        elif analysis_state == "CLOSED":
+            st.info("NSE session is open; waiting for signal analysis.")
+        elif analysis_state:
+            st.info(f"Latest NIFTY evaluation: {analysis_state}{score_text} · {analysis_reason}")
     st.caption(
         f"Signal rule: score {settings.min_total_score}/7 on a closed candle; "
         "volume confirms the setup internally."
@@ -310,11 +315,56 @@ def render_equities() -> None:
 @st.fragment(run_every=60)
 def render_news() -> None:
     st.subheader("Recent News")
-    news_df = pd.DataFrame(list_news(20))
+    news_df = pd.DataFrame(list_news(limit=50))
     if not news_df.empty:
-        news_cols = ["source", "title", "market_bias", "published_at"]
-        news_df = news_df[[column for column in news_cols if column in news_df.columns]]
-        streamlit_ui.dataframe(news_df, width="stretch", hide_index=True)
+        page_size = 10
+        page_count = max(1, (len(news_df) + page_size - 1) // page_size)
+        page_key = "news_page"
+        current_page = min(
+            max(int(st.session_state.get(page_key, 1)), 1),
+            page_count,
+        )
+        st.session_state[page_key] = current_page
+        selected_page = int(streamlit_ui.number_input(
+            "News page",
+            min_value=1,
+            max_value=page_count,
+            step=1,
+            key=page_key,
+        ))
+        start = (selected_page - 1) * page_size
+        visible_news = news_df.iloc[start:start + page_size].copy()
+        news_cols = [
+            "source", "title", "event_categories", "symbols",
+            "market_bias", "published_at", "url",
+        ]
+        visible_news = visible_news[
+            [column for column in news_cols if column in visible_news.columns]
+        ]
+        for column in ("event_categories", "symbols"):
+            if column in visible_news.columns:
+                fallback = "Unclassified" if column == "event_categories" else "Not matched"
+                visible_news[column] = visible_news[column].map(
+                    lambda values: ", ".join(cast(list[str], values))
+                    if isinstance(values, list) and values
+                    else fallback
+                )
+        streamlit_ui.dataframe(
+            visible_news,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "url": streamlit_ui.column_config.LinkColumn(
+                    "Article", display_text="Open"
+                )
+            },
+        )
+        first_item = start + 1
+        last_item = min(start + page_size, len(news_df))
+        st.caption(
+            f"Showing newest items {first_item}-{last_item} of {len(news_df)} · "
+            f"Page {selected_page} of {page_count}"
+        )
     else:
         st.info("No news items have been recorded yet.")
 

@@ -39,6 +39,7 @@ class Trade:
     exit_time: str | None
     exit_price: float | None
     r_multiple: float | None
+    net_r_multiple: float | None
     setup_key: str | None = None
     hour: int | None = None
     adx: float | None = None
@@ -81,6 +82,27 @@ def _optional_float(value: Any) -> float | None:
     if value is None or pd.isna(value):
         return None
     return float(value)
+
+
+def net_r_multiple(
+    gross_r_multiple: float | None,
+    round_trip_cost_points: float,
+    risk_points: float,
+) -> float | None:
+    if gross_r_multiple is None or risk_points <= 0:
+        return None
+    return gross_r_multiple - round_trip_cost_points / risk_points
+
+
+def _profit_factor(r_values: list[float]) -> float | None:
+    losses = abs(sum(value for value in r_values if value < 0))
+    if losses == 0:
+        return None
+    return round(sum(value for value in r_values if value > 0) / losses, 4)
+
+
+def _metrics_without_trades(report: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in report.items() if key != "trades"}
 
 
 def _resolve_trade(trade: Trade, future: pd.DataFrame) -> Trade:
@@ -144,7 +166,19 @@ def run_backtest(
     progress: bool = False,
     probability_threshold: float | None = None,
     trade_quality_model: dict[str, Any] | None = None,
+    minimum_technical_score: int | None = None,
+    round_trip_cost_points: float = 0.0,
 ) -> dict[str, Any]:
+    if round_trip_cost_points < 0:
+        raise ValueError("round_trip_cost_points must be >= 0")
+    if (
+        minimum_technical_score is not None
+        and minimum_technical_score < settings.min_total_score
+    ):
+        raise ValueError(
+            f"minimum_technical_score must be >= {settings.min_total_score}"
+        )
+
     minute = frame.copy()
     one = add_indicators(minute)
     five = add_indicators(_resample_5m(minute))
@@ -201,6 +235,13 @@ def run_backtest(
             < pd.to_timedelta(quality.signal_cooldown_minutes, unit="min")
         ):
             continue
+        if (
+            minimum_technical_score is not None
+            and int(signal["technical_score"]) < minimum_technical_score
+        ):
+            last_signal_bar = decision_time
+            last_direction = direction
+            continue
 
         entry_time = one.index[i + 1]
         entry_price = float(one.iloc[i + 1]["open"])
@@ -226,6 +267,7 @@ def run_backtest(
             exit_time=None,
             exit_price=None,
             r_multiple=None,
+            net_r_multiple=None,
             setup_key=signal.get("setup_key"),
             hour=int(decision_time.hour),
             adx=float(signal["adx"]) if signal.get("adx") is not None else None,
@@ -236,6 +278,11 @@ def run_backtest(
             structure=("BULL_BREAKOUT" if not pd.isna(one.iloc[i].get("opening_range_high")) and float(one.iloc[i]["close"]) > float(one.iloc[i]["opening_range_high"]) else "BEAR_BREAKDOWN" if not pd.isna(one.iloc[i].get("opening_range_low")) and float(one.iloc[i]["close"]) < float(one.iloc[i]["opening_range_low"]) else "NONE"),
         )
         trade = _resolve_trade(trade, one.iloc[i + 1 :])
+        trade.net_r_multiple = net_r_multiple(
+            trade.r_multiple,
+            round_trip_cost_points,
+            abs(trade.entry - trade.stop),
+        )
         trades.append(trade)
 
         if trade.exit_time:
@@ -254,6 +301,9 @@ def run_backtest(
     ambiguous = sum(t.status == "AMBIGUOUS" for t in trades)
     expired = sum(t.status == "EXPIRED" for t in trades)
     r_values = [t.r_multiple for t in resolved if t.r_multiple is not None]
+    net_r_values = [
+        t.net_r_multiple for t in resolved if t.net_r_multiple is not None
+    ]
 
     by_regime: dict[str, dict[str, Any]] = {}
     for trade in trades:
@@ -282,23 +332,39 @@ def run_backtest(
         "resolved": len(resolved),
         "win_rate_percent": round(wins / len(resolved) * 100, 2) if resolved else None,
         "average_r": round(sum(r_values) / len(r_values), 4) if r_values else None,
-        "profit_factor": (
-            round(
-                sum(r for r in r_values if r > 0)
-                / abs(sum(r for r in r_values if r < 0)),
-                4,
-            )
-            if any(r < 0 for r in r_values)
+        "profit_factor": _profit_factor(r_values),
+        "round_trip_cost_points": round_trip_cost_points,
+        "net_average_r": (
+            round(sum(net_r_values) / len(net_r_values), 4)
+            if net_r_values
             else None
         ),
+        "net_profit_factor": _profit_factor(net_r_values),
         "by_regime": by_regime,
         "trades": [asdict(t) for t in trades],
     }
 
 
-def walk_forward(frame: pd.DataFrame, folds: int = 5, progress: bool = False, probability_threshold: float = 0.50) -> list[dict[str, Any]]:
+def walk_forward(
+    frame: pd.DataFrame,
+    folds: int = 5,
+    progress: bool = False,
+    probability_threshold: float = 0.50,
+    score_thresholds: list[int] | None = None,
+    round_trip_cost_points: float = 0.0,
+) -> list[dict[str, Any]]:
     if folds < 2:
         raise ValueError("folds must be >= 2")
+    if round_trip_cost_points < 0:
+        raise ValueError("round_trip_cost_points must be >= 0")
+    if score_thresholds is not None:
+        if not score_thresholds:
+            raise ValueError("score_thresholds cannot be empty")
+        if any(score < settings.min_total_score for score in score_thresholds):
+            raise ValueError(
+                f"score thresholds must be >= {settings.min_total_score}"
+            )
+        score_thresholds = sorted(set(score_thresholds))
 
     boundaries = np.linspace(0, len(frame), folds + 1, dtype=int)
     chunks = [
@@ -317,8 +383,45 @@ def walk_forward(frame: pd.DataFrame, folds: int = 5, progress: bool = False, pr
                 print(message, flush=True)
 
         log(f"\n[Fold {i}/{total_folds}] train={len(train):,} rows, validation={len(validation):,} rows")
+        if score_thresholds is not None:
+            score_reports: dict[str, Any] = {}
+            for score in score_thresholds:
+                log(
+                    f"[Fold {i}/{total_folds}] Testing minimum technical score {score}..."
+                )
+                report = run_backtest(
+                    validation,
+                    label=f"fold-{i}-score-{score}",
+                    minimum_technical_score=score,
+                    round_trip_cost_points=round_trip_cost_points,
+                )
+                score_reports[str(score)] = _metrics_without_trades(report)
+                log(
+                    f"[Fold {i}/{total_folds}] Score {score}: "
+                    f"{report.get('signals', 0)} signals, "
+                    f"{report.get('win_rate_percent')}% win rate, "
+                    f"net PF {report.get('net_profit_factor')}"
+                )
+            results.append(
+                {
+                    "fold": i,
+                    "train_start": train.index[0].isoformat(),
+                    "train_end": train.index[-1].isoformat(),
+                    "validation_start": validation.index[0].isoformat(),
+                    "validation_end": validation.index[-1].isoformat(),
+                    "training_rows": len(train),
+                    "round_trip_cost_points": round_trip_cost_points,
+                    "score_threshold_results": score_reports,
+                }
+            )
+            continue
+
         log(f"[Fold {i}/{total_folds}] Running validation baseline...")
-        baseline = run_backtest(validation, label=f"fold-{i}-baseline")
+        baseline = run_backtest(
+            validation,
+            label=f"fold-{i}-baseline",
+            round_trip_cost_points=round_trip_cost_points,
+        )
         log(f"[Fold {i}/{total_folds}] Baseline complete: {baseline.get('signals', 0)} signals, {baseline.get('win_rate_percent')}% win rate")
 
         log(f"[Fold {i}/{total_folds}] Building training trade history...")
@@ -337,6 +440,7 @@ def walk_forward(frame: pd.DataFrame, folds: int = 5, progress: bool = False, pr
             probability_model=model,
             label=f"fold-{i}-filtered",
             probability_threshold=probability_threshold,
+            round_trip_cost_points=round_trip_cost_points,
         )
         log(f"[Fold {i}/{total_folds}] Fitting trade-quality model...")
         quality_model = fit_trade_quality_model(train_report["trades"])
@@ -349,6 +453,7 @@ def walk_forward(frame: pd.DataFrame, folds: int = 5, progress: bool = False, pr
             validation,
             label=f"fold-{i}-quality",
             trade_quality_model=quality_model,
+            round_trip_cost_points=round_trip_cost_points,
         )
         log(
             f"[Fold {i}/{total_folds}] Quality complete: "
@@ -410,6 +515,19 @@ def main() -> None:
         help="minimum modeled win probability for walk-forward filtering",
     )
     parser.add_argument(
+        "--score-sweep",
+        type=int,
+        nargs="+",
+        metavar="SCORE",
+        help="compare minimum technical scores on each walk-forward validation fold",
+    )
+    parser.add_argument(
+        "--round-trip-cost-points",
+        type=float,
+        default=0.0,
+        help="estimated total entry+exit costs in price points (default: 0)",
+    )
+    parser.add_argument(
         "--fit-probability-model",
         "--fit-profiles",
         dest="fit_probability_model",
@@ -418,6 +536,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.fit_probability_model and args.walk_forward:
         parser.error("--fit-probability-model cannot be combined with --walk-forward")
+    if args.score_sweep and not args.walk_forward:
+        parser.error("--score-sweep requires --walk-forward")
 
     frame = load_ohlcv_csv(args.csv)
     if args.walk_forward:
@@ -426,9 +546,15 @@ def main() -> None:
             args.folds,
             progress=args.progress,
             probability_threshold=args.probability_threshold,
+            score_thresholds=args.score_sweep,
+            round_trip_cost_points=args.round_trip_cost_points,
         )
     else:
-        result = run_backtest(frame, progress=args.progress)
+        result = run_backtest(
+            frame,
+            progress=args.progress,
+            round_trip_cost_points=args.round_trip_cost_points,
+        )
         if args.fit_probability_model:
             model = fit_probability_model(result["trades"])
             save_model(model, args.fit_probability_model)

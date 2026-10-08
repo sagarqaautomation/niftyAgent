@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from config import settings
 from accuracy_config import quality_settings as quality
+from market_hours import is_current_session_candle, is_market_open
 from database import (
     init_db, insert_news, insert_candles, insert_spot_candles, insert_signal,
     performance, resolve_with_bar, expire_signals, update_market_status,
@@ -17,7 +18,12 @@ from database import (
     resolve_equity_signal_at_price,
     update_analysis_status, utc_now
 )
-from news_sources import fetch_all, aggregate_news
+from news_sources import (
+    aggregate_news,
+    equity_news_bias,
+    fetch_all,
+    tag_news_symbols,
+)
 from candle_engine import CandleEngine
 from signal_engine import build_signal, add_risk_levels
 from indicators import detect_candlestick_pattern_rows, detect_latest_candlestick_patterns
@@ -33,22 +39,28 @@ CandleFrames = dict[str, pd.DataFrame]
 CandleRecord = dict[str, Any]
 Tick = Mapping[str, Any]
 
-def market_session_has_ended(now: datetime | None = None) -> bool:
-    market_now = now or datetime.now(ZoneInfo(settings.market_timezone))
-    if market_now.tzinfo is None:
-        market_now = market_now.replace(tzinfo=ZoneInfo(settings.market_timezone))
-    else:
-        market_now = market_now.astimezone(ZoneInfo(settings.market_timezone))
-    return market_now.weekday() >= 5 or market_now.time() >= datetime_time(15, 30)
-
-
-def refresh_news() -> str:
+def refresh_news(
+    aliases_by_symbol: Mapping[str, Sequence[str]] | None = None,
+) -> tuple[str, list[NewsItem]]:
     if not settings.news_enabled:
-        return "NEUTRAL"
-    items: list[NewsItem] = fetch_all()
+        return "NEUTRAL", []
+    if aliases_by_symbol is None and settings.equity_scan_enabled:
+        try:
+            aliases_by_symbol = {
+                symbol: [symbol]
+                for symbol in load_watchlist(settings.equity_watchlist_path)
+            }
+        except Exception as exc:
+            print(f"Could not load equity symbols for news matching: {exc}")
+            aliases_by_symbol = {}
+    items: list[NewsItem] = fetch_all(aliases_by_symbol)
+    fetched_at = utc_now()
+    fetched_epoch = datetime.fromisoformat(fetched_at).timestamp()
     for item in items:
+        item["fetched_at"] = fetched_at
+        item["available_epoch"] = fetched_epoch
         insert_news(item)
-    return cast(str, aggregate_news(items, quality.news_max_age_minutes))
+    return cast(str, aggregate_news(items, quality.news_max_age_minutes)), items
 
 def candle_record(
     timeframe: str,
@@ -217,6 +229,21 @@ def process_frames(
 
 def main() -> None:
     init_db()
+    while not is_market_open():
+        closed_reason = (
+            "NSE market is closed. Live market data will start at 09:00 IST "
+            "on the next weekday session."
+        )
+        update_market_status(
+            "CLOSED",
+            last_error="",
+            analysis_state="CLOSED",
+            analysis_reason=closed_reason,
+            analysis_updated_at=utc_now(),
+        )
+        print(closed_reason, flush=True)
+        time.sleep(30)
+
     update_market_status(
         "STARTING", last_error="", one_minute_bars=0, five_minute_bars=0,
         analysis_state="WARMING_UP", analysis_score=0,
@@ -230,13 +257,13 @@ def main() -> None:
 
     if not settings.live_market_data:
         if settings.news_enabled:
-            bias = refresh_news()
+            bias, _ = refresh_news()
             print("Current news bias:", bias)
         print("Performance:", performance())
         print("\nProject is ready. Set LIVE_MARKET_DATA=true after configuring the broker adapter.")
         return
 
-    if market_session_has_ended():
+    if not is_market_open():
         expire_stale_equity_signals(expire_all_open=True)
         closed_reason = "NSE session is closed; live market data was not started."
         update_market_status(
@@ -249,9 +276,11 @@ def main() -> None:
         print(closed_reason, flush=True)
         return
 
+    news_items: list[NewsItem] = []
+    news_bias = "NEUTRAL"
     if settings.news_enabled:
-        bias = refresh_news()
-        print("Current news bias:", bias)
+        news_bias, news_items = refresh_news()
+        print("Current news bias:", news_bias)
 
     print("Performance:", performance())
 
@@ -278,10 +307,13 @@ def main() -> None:
         spot_token = int(settings.nifty_instrument_token) if settings.nifty_instrument_token else None
         equity_tokens_by_symbol: dict[str, int] = {}
         equity_exchange_by_symbol: dict[str, str] = {}
+        equity_news_aliases: dict[str, list[str]] = {}
+        instrument_alias_sources: list[dict[str, Any]] = []
         if settings.equity_scan_enabled:
             try:
                 equity_symbols = load_watchlist(settings.equity_watchlist_path)
                 equity_instruments = broker.get_instruments("NSE")
+                instrument_alias_sources.extend(equity_instruments)
                 equity_tokens_by_symbol, missing_equities = resolve_equity_tokens(
                     equity_instruments, equity_symbols
                 )
@@ -291,6 +323,7 @@ def main() -> None:
                 if missing_equities:
                     try:
                         bse_instruments = broker.get_instruments("BSE")
+                        instrument_alias_sources.extend(bse_instruments)
                         bse_tokens, missing_equities = resolve_equity_tokens(
                             bse_instruments, missing_equities, exchange="BSE"
                         )
@@ -306,9 +339,24 @@ def main() -> None:
                 )
                 if missing_equities:
                     print("Unmatched equity symbols:", ", ".join(missing_equities))
+                equity_news_aliases = {
+                    symbol: [symbol] for symbol in equity_tokens_by_symbol
+                }
+                for instrument in instrument_alias_sources:
+                    symbol = str(instrument.get("tradingsymbol", "")).upper()
+                    if symbol not in equity_news_aliases:
+                        continue
+                    company_name = str(instrument.get("name", "")).strip()
+                    if company_name:
+                        equity_news_aliases[symbol].append(company_name)
             except Exception as exc:
                 print(f"Equity scan setup failed; continuing with NIFTY only: {exc}")
                 equity_tokens_by_symbol = {}
+                equity_news_aliases = {}
+        if news_items and equity_news_aliases:
+            tag_news_symbols(news_items, equity_news_aliases)
+            for item in news_items:
+                insert_news(item)
         equity_symbol_by_token = {
             token: symbol for symbol, token in equity_tokens_by_symbol.items()
         }
@@ -408,7 +456,6 @@ def main() -> None:
         )
         print("Historical warm-up error:", exc)
 
-    news_bias = "NEUTRAL"
     last_status_write = 0.0
     last_spot_status_write = 0.0
     last_processed_minute = None
@@ -600,7 +647,12 @@ def main() -> None:
                     equity_symbol,
                     equity_frames,
                     float(equity_price),
-                    news_bias,
+                    equity_news_bias(
+                        news_items,
+                        equity_symbol,
+                        equity_news_aliases.get(equity_symbol, [equity_symbol]),
+                        quality.news_max_age_minutes,
+                    ),
                 )
                 if equity_signal is None:
                     active_equity_setups.discard(equity_symbol)
@@ -685,6 +737,16 @@ def main() -> None:
                 closed_five = closed_five.loc[closed_five.index < current_five_bucket]
                 if not closed_minute.empty:
                     closed_timestamp = closed_minute.index[-1]
+                    if not is_current_session_candle(
+                        closed_timestamp.to_pydatetime(),
+                        tick_time.to_pydatetime(),
+                    ):
+                        update_analysis_status(
+                            "WARMING_UP",
+                            None,
+                            "Waiting for a closed candle from today's NSE session.",
+                        )
+                        continue
                     if closed_timestamp != last_processed_minute:
                         last_processed_minute = closed_timestamp
                         try:
@@ -816,7 +878,7 @@ def main() -> None:
         last_attempt = 0.0
         last_error_at = 0.0
         while not stop_spot_refresh.wait(1):
-            if market_session_has_ended():
+            if not is_market_open():
                 break
             now = time.monotonic()
             if now - last_attempt < 5:
@@ -843,7 +905,7 @@ def main() -> None:
     def reconcile_open_equity_signals() -> None:
         last_error_at = 0.0
         while not stop_equity_reconcile.wait(5):
-            if market_session_has_ended():
+            if not is_market_open():
                 break
             expire_stale_equity_signals()
             open_signals = list_equity_signals_by_status("OPEN", 500)
@@ -924,12 +986,13 @@ def main() -> None:
         close_time = market_now.replace(hour=15, minute=30, second=0, microsecond=0)
         seconds_until_close = max(1.0, (close_time - market_now).total_seconds())
         time.sleep(min(max(1, settings.news_refresh_seconds), seconds_until_close))
-        if market_session_has_ended():
+        market_now = datetime.now(ZoneInfo(settings.market_timezone))
+        if not is_market_open():
             broker.stop()
             stop_spot_refresh.set()
             stop_equity_reconcile.set()
             expire_stale_equity_signals(market_now, expire_all_open=True)
-            closed_reason = "NSE session ended at 15:30 IST; live market data is closed."
+            closed_reason = "NSE market is closed; live market data has stopped."
             update_market_status(
                 "CLOSED",
                 last_error="",
@@ -940,7 +1003,7 @@ def main() -> None:
             print(closed_reason, flush=True)
             break
         try:
-            news_bias = refresh_news()
+            news_bias, news_items = refresh_news(equity_news_aliases)
             print("News bias refreshed:", news_bias)
         except Exception as exc:
             print("News refresh error:", exc)

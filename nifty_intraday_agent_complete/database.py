@@ -62,6 +62,19 @@ def ensure_market_status_columns() -> None:
             if name not in columns:
                 conn.execute(f"ALTER TABLE market_status ADD COLUMN {name} {declaration}")
 
+def ensure_news_columns() -> None:
+    additions = {
+        "summary": "TEXT",
+        "event_categories_json": "TEXT NOT NULL DEFAULT '[]'",
+        "symbols_json": "TEXT NOT NULL DEFAULT '[]'",
+        "published_epoch": "REAL",
+    }
+    with connect() as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(news)")}
+        for name, declaration in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE news ADD COLUMN {name} {declaration}")
+
 def ensure_signal_columns() -> None:
     additions = {
         "signal_instrument": "TEXT",
@@ -222,6 +235,7 @@ def init_db():
         with open("schema.sql", "r", encoding="utf-8") as f:
             conn.executescript(f.read())
     ensure_market_status_columns()
+    ensure_news_columns()
     ensure_signal_columns()
     ensure_equity_feature_snapshot_column()
     ensure_equity_candle_patterns_column()
@@ -412,12 +426,25 @@ def insert_news(item: dict[str, Any]) -> None:
     with connect() as conn:
         conn.execute("""
         INSERT OR IGNORE INTO news
-        (source,title,url,published_at,fetched_at,sentiment,market_bias)
-        VALUES (?,?,?,?,?,?,?)
+        (source,title,url,published_at,fetched_at,sentiment,market_bias,summary,
+         event_categories_json,symbols_json,published_epoch)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(source,title) DO UPDATE SET
+        url=excluded.url,
+        published_at=COALESCE(excluded.published_at,news.published_at),
+        sentiment=excluded.sentiment,
+        market_bias=excluded.market_bias,
+        summary=excluded.summary,
+        event_categories_json=excluded.event_categories_json,
+        symbols_json=excluded.symbols_json,
+        published_epoch=COALESCE(excluded.published_epoch,news.published_epoch)
         """, (
             item["source"], item["title"], item.get("url"),
             item.get("published_at"), utc_now(), item.get("sentiment"),
-            item.get("market_bias")
+            item.get("market_bias"), item.get("summary"),
+            json.dumps(item.get("categories", []), ensure_ascii=True),
+            json.dumps(item.get("symbols", []), ensure_ascii=True),
+            item.get("published_epoch"),
         ))
 
 def insert_signal(s: dict[str, Any]) -> int:
@@ -715,13 +742,26 @@ def equity_signal_performance() -> dict[str, int | float | None]:
         "accuracy_percent": accuracy,
     }
 
-def list_news(limit: int = 50) -> list[dict[str, Any]]:
+def list_news(limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    if limit < 1 or offset < 0:
+        raise ValueError("limit must be positive and offset must be non-negative")
     with connect() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("""
-        SELECT * FROM news ORDER BY id DESC LIMIT ?
-        """, (limit,)).fetchall()
-        return [dict(x) for x in rows]
+        SELECT * FROM news
+        ORDER BY COALESCE(
+            published_epoch,
+            CAST(strftime('%s', fetched_at) AS REAL)
+        ) DESC, id DESC
+        LIMIT ? OFFSET ?
+        """, (limit, offset)).fetchall()
+        items = [dict(row) for row in rows]
+    for item in items:
+        item["event_categories"] = json.loads(
+            item.pop("event_categories_json", "[]") or "[]"
+        )
+        item["symbols"] = json.loads(item.pop("symbols_json", "[]") or "[]")
+    return items
 
 def list_candles(limit: int = 50) -> list[dict[str, Any]]:
     with connect() as conn:

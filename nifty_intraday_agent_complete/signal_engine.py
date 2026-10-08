@@ -147,6 +147,7 @@ def build_signal(
     probability_model: dict[str, Any] | None = None,
     probability_threshold: float | None = None,
     trade_quality_model: dict[str, Any] | None = None,
+    candlestick_patterns: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     required_history = max(40, quality.minimum_history_bars)
     if len(df1) < required_history or len(df5) < 40:
@@ -246,7 +247,11 @@ def build_signal(
             bear += 1
             reasons.append("strong bearish candle")
 
-    patterns = detect_latest_candlestick_patterns(df1)
+    patterns = (
+        detect_latest_candlestick_patterns(df1)
+        if candlestick_patterns is None
+        else candlestick_patterns
+    )
     bullish_patterns = [p["name"] for p in patterns if p["direction"] == "BULLISH"]
     bearish_patterns = [p["name"] for p in patterns if p["direction"] == "BEARISH"]
     if bullish_patterns and not bearish_patterns and bull > bear:
