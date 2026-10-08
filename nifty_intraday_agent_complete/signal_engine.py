@@ -181,6 +181,8 @@ def build_signal(
     t_ema9_slope = _value(t, "ema9_slope")
     t_ema21_slope = _value(t, "ema21_slope")
     adx = _value(t, "adx14")
+    plus_di = _value(t, "plus_di14")
+    minus_di = _value(t, "minus_di14")
 
     if t_ema9 > t_ema21:
         bull += 2
@@ -270,6 +272,24 @@ def build_signal(
     if regime == "UNKNOWN":
         direction = "WAIT"
         reasons.append("market regime unavailable")
+
+    # Targeted v2.1 loss-cluster hypothesis. Transition setups have been the
+    # weakest recurring regime in walk-forward validation. When explicitly
+    # enabled, require the directional-movement indicators to agree with the
+    # proposed CALL/PUT instead of relying on EMA direction alone.
+    if (
+        direction != "WAIT"
+        and regime == "TRANSITION"
+        and quality.transition_require_di_alignment
+        and not pd.isna(plus_di)
+        and not pd.isna(minus_di)
+    ):
+        if direction == "CALL" and plus_di <= minus_di:
+            direction = "WAIT"
+            reasons.append("transition CALL blocked: +DI is not above -DI")
+        elif direction == "PUT" and minus_di <= plus_di:
+            direction = "WAIT"
+            reasons.append("transition PUT blocked: -DI is not above +DI")
 
     if technical_score < settings.min_total_score:
         direction = "WAIT"
@@ -371,6 +391,11 @@ def build_signal(
         "option_bias": option_bias,
         "market_regime": regime,
         "adx": adx if not pd.isna(adx) else None,
+        "plus_di": plus_di if not pd.isna(plus_di) else None,
+        "minus_di": minus_di if not pd.isna(minus_di) else None,
+        "di_alignment": (
+            "BULLISH" if plus_di > minus_di else "BEARISH" if minus_di > plus_di else "NEUTRAL"
+        ) if not pd.isna(plus_di) and not pd.isna(minus_di) else None,
         "rsi": rsi if not pd.isna(rsi) else None,
         "relative_volume": rel_volume if not pd.isna(rel_volume) else None,
         "vwap_distance_pct": vwap_distance_pct,
