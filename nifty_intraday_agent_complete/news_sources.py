@@ -94,8 +94,11 @@ def classify_market_context(text: str, fallback_score: int = 0) -> tuple[int, Li
     supportive for an oil-importing market) and otherwise falls back to the
     headline's general keyword score.
     """
-    normalized = re.sub(r"[^a-z0-9$% ]+", " ", (text or "").lower())
-    has = lambda terms: any(term in normalized for term in terms)
+    normalized = re.sub(r"\s+", " ", (text or "").lower())
+    has = lambda terms: any(
+        re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", normalized)
+        for term in terms
+    )
     up = ("rise", "rises", "rose", "rising", "surge", "surges", "surged",
           "jump", "jumps", "jumped", "spike", "spikes", "spiked", "climb",
           "climbs", "climbed", "soar", "soars", "soared", "higher", "gain",
