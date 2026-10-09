@@ -16,6 +16,11 @@ SOURCES = {
     "LiveMint": "https://www.livemint.com/rss/markets",
     "Economic Times": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
     "Business Standard": "https://www.business-standard.com/rss/markets-106.rss",
+    # Global risk drivers that can move Indian equities through oil, yields,
+    # currency, geopolitical risk and overseas risk appetite.
+    "CNBC World": "https://www.cnbc.com/id/100727362/device/rss/rss.html",
+    "CNBC Markets": "https://www.cnbc.com/id/15839135/device/rss/rss.html",
+    "BBC Business": "https://feeds.bbci.co.uk/news/business/rss.xml",
 }
 
 EVENT_TERMS: dict[str, tuple[str, ...]] = {
@@ -42,6 +47,13 @@ EVENT_TERMS: dict[str, tuple[str, ...]] = {
         "nifty", "sensex", "rbi", "repo rate", "rupee", "crude oil", "brent",
         "inflation", "treasury yield", "fii", "fpi", "foreign investors",
         "global markets", "market-wide", "stock market crash",
+    ),
+    "GLOBAL_MACRO": (
+        "federal reserve", "fed rate", "us treasury", "treasury yields",
+        "wall street", "s&p 500", "nasdaq", "dow jones", "asia markets",
+        "asian stocks", "oil prices", "brent crude", "wti crude",
+        "middle east", "iran", "geopolitical", "trade tariff", "tariffs",
+        "dollar index", "global bond", "us futures", "european markets",
     ),
 }
 
@@ -194,7 +206,7 @@ def aggregate_news(
     score = sum(
         float(item.get("sentiment", 0) or 0)
         for item in unique.values()
-        if "MARKET_MACRO" in item.get("categories", [])
+        if {"MARKET_MACRO", "GLOBAL_MACRO"}.intersection(item.get("categories", []))
     )
     if score >= 3:
         return "BULLISH"
