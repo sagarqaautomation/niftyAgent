@@ -220,7 +220,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def candle_strength(row: pd.Series[Any]) -> float:
+def candle_strength(row: pd.Series) -> float:
     rng = row["high"] - row["low"]
     if rng <= 0:
         return 0.0
