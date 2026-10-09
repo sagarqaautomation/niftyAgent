@@ -20,7 +20,7 @@ def _empty(reason: str, state: str = "WARMING_UP") -> dict[str, Any]:
     }
 
 
-def _value(row: pd.Series[Any], name: str, default: float = float("nan")) -> float:
+def _value(row: pd.Series, name: str, default: float = float("nan")) -> float:
     value = row.get(name, default)
     try:
         return float(value)
@@ -46,7 +46,7 @@ def _regime(df5: pd.DataFrame) -> str:
     return "RANGE"
 
 
-def _structure_score(row: pd.Series[Any]) -> tuple[int, int, list[str]]:
+def _structure_score(row: pd.Series) -> tuple[int, int, list[str]]:
     bull = bear = 0
     reasons: list[str] = []
     close = _value(row, "close")
