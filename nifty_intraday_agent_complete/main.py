@@ -27,7 +27,7 @@ from news_sources import (
 from candle_engine import CandleEngine
 from signal_engine import build_signal, add_risk_levels
 from indicators import detect_candlestick_pattern_rows, detect_latest_candlestick_patterns
-from market_context import load_constituent_weights, summarize_constituent_returns
+from market_context import load_constituent_weights, summarize_constituent_news, summarize_constituent_returns
 from equity_scanner import (
     build_equity_buy_signal, load_watchlist,
     resolve_equity_tokens,
@@ -170,6 +170,8 @@ def process_frames(
     spot_reference: Mapping[str, str | float] | None = None,
     constituent_bias: str = "NEUTRAL",
     constituent_metrics: Mapping[str, Any] | None = None,
+    constituent_news_bias: str = "NEUTRAL",
+    constituent_news_metrics: Mapping[str, Any] | None = None,
 ) -> Signal | None:
     df1 = frames["1min"]
     df5 = frames["5min"]
@@ -182,8 +184,13 @@ def process_frames(
         candle_record("5min", df5.index[-1], df5.iloc[-1]),
     ])
 
-    signal: Signal = build_signal(df1, df5, news_bias, option_bias, constituent_bias=constituent_bias)
+    signal: Signal = build_signal(
+        df1, df5, news_bias, option_bias,
+        constituent_bias=constituent_bias,
+        constituent_news_bias=constituent_news_bias,
+    )
     signal["constituent_metrics"] = dict(constituent_metrics or {})
+    signal["constituent_news_metrics"] = dict(constituent_news_metrics or {})
     signal["signal_instrument"] = signal_instrument or "NIFTY spot index"
 
     def feature_snapshot(frame: pd.DataFrame) -> dict[str, Any]:
@@ -213,6 +220,8 @@ def process_frames(
         "option_bias": option_bias,
         "constituent_bias": constituent_bias,
         "constituent_metrics": dict(constituent_metrics or {}),
+        "constituent_news_bias": constituent_news_bias,
+        "constituent_news_metrics": dict(constituent_news_metrics or {}),
         "one_minute": feature_snapshot(df1),
         "five_minute": feature_snapshot(df5),
     }
@@ -769,6 +778,12 @@ def main() -> None:
                         try:
                             constituent_metrics = summarize_constituent_returns(latest_equity_returns_pct, constituent_weights)
                             constituent_bias = str(constituent_metrics["bias"])
+                            constituent_news_metrics = summarize_constituent_news(
+                                news_items,
+                                constituent_weights,
+                                quality.news_max_age_minutes,
+                            )
+                            constituent_news_bias = str(constituent_news_metrics["bias"])
                             result = process_frames(
                                 {"1min": closed_minute, "5min": closed_five},
                                 news_bias,
@@ -782,6 +797,8 @@ def main() -> None:
                                 else None,
                                 constituent_bias,
                                 constituent_metrics,
+                                constituent_news_bias,
+                                constituent_news_metrics,
                             )
                         except Exception as exc:
                             update_analysis_status(
@@ -801,6 +818,8 @@ def main() -> None:
                             f"regime={result.get('market_regime')}",
                             f"news={news_bias}",
                             f"constituent={constituent_bias}",
+                            f"constituent_news={constituent_news_bias}",
+                            f"weighted_news_score={constituent_news_metrics.get('weighted_score', 0)}",
                             f"breadth={constituent_metrics.get('advancers', 0)}/{constituent_metrics.get('constituents_seen', 0)}",
                             f"constituent_method={constituent_metrics.get('weighting', 'unavailable')}",
                             f"candle_score={result.get('candlestick_score', 0)}",
