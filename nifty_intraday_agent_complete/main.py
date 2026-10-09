@@ -27,6 +27,7 @@ from news_sources import (
 from candle_engine import CandleEngine
 from signal_engine import build_signal, add_risk_levels
 from indicators import detect_candlestick_pattern_rows, detect_latest_candlestick_patterns
+from market_context import load_constituent_weights, summarize_constituent_returns
 from equity_scanner import (
     build_equity_buy_signal, load_watchlist,
     resolve_equity_tokens,
@@ -167,6 +168,8 @@ def process_frames(
     option_bias: str = "NEUTRAL",
     signal_instrument: str | None = None,
     spot_reference: Mapping[str, str | float] | None = None,
+    constituent_bias: str = "NEUTRAL",
+    constituent_metrics: Mapping[str, Any] | None = None,
 ) -> Signal | None:
     df1 = frames["1min"]
     df5 = frames["5min"]
@@ -179,7 +182,8 @@ def process_frames(
         candle_record("5min", df5.index[-1], df5.iloc[-1]),
     ])
 
-    signal: Signal = build_signal(df1, df5, news_bias, option_bias)
+    signal: Signal = build_signal(df1, df5, news_bias, option_bias, constituent_bias=constituent_bias)
+    signal["constituent_metrics"] = dict(constituent_metrics or {})
     signal["signal_instrument"] = signal_instrument or "NIFTY spot index"
 
     def feature_snapshot(frame: pd.DataFrame) -> dict[str, Any]:
@@ -207,6 +211,8 @@ def process_frames(
         "context_score": signal.get("context_score"),
         "news_bias": news_bias,
         "option_bias": option_bias,
+        "constituent_bias": constituent_bias,
+        "constituent_metrics": dict(constituent_metrics or {}),
         "one_minute": feature_snapshot(df1),
         "five_minute": feature_snapshot(df5),
     }
@@ -390,6 +396,12 @@ def main() -> None:
     active_equity_setups: set[str] = set()
     equity_cumulative_volumes: dict[str, float] = {}
     equity_volume_dates: dict[str, Any] = {}
+    latest_equity_returns_pct: dict[str, float] = {}
+    constituent_weights = load_constituent_weights(settings.nifty50_weights_path)
+    if constituent_weights:
+        print(f"Loaded NIFTY constituent weights for {len(constituent_weights)} symbols")
+    else:
+        print("NIFTY weights file unavailable; constituent context will use equal-weight breadth")
 
     try:
         history_end = pd.Timestamp.now(tz=settings.market_timezone).to_pydatetime()
@@ -605,6 +617,11 @@ def main() -> None:
                 if closed_equity_minutes.empty:
                     continue
                 closed_equity_time = cast(pd.Timestamp, closed_equity_minutes.index[-1])
+                if len(closed_equity_minutes) >= 2:
+                    previous_close = float(closed_equity_minutes.iloc[-2]["close"])
+                    current_close = float(closed_equity_minutes.iloc[-1]["close"])
+                    if previous_close > 0:
+                        latest_equity_returns_pct[equity_symbol] = ((current_close / previous_close) - 1.0) * 100.0
                 if last_equity_processed.get(equity_symbol) == closed_equity_time:
                     continue
                 last_equity_processed[equity_symbol] = closed_equity_time
@@ -750,6 +767,8 @@ def main() -> None:
                     if closed_timestamp != last_processed_minute:
                         last_processed_minute = closed_timestamp
                         try:
+                            constituent_metrics = summarize_constituent_returns(latest_equity_returns_pct, constituent_weights)
+                            constituent_bias = str(constituent_metrics["bias"])
                             result = process_frames(
                                 {"1min": closed_minute, "5min": closed_five},
                                 news_bias,
@@ -761,6 +780,8 @@ def main() -> None:
                                 }
                                 if latest_spot_price is not None and latest_spot_time is not None
                                 else None,
+                                constituent_bias,
+                                constituent_metrics,
                             )
                         except Exception as exc:
                             update_analysis_status(
