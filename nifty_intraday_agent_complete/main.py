@@ -792,6 +792,22 @@ def main() -> None:
                         if not result:
                             continue
                         direction = result["signal"]
+                        print(
+                            "[NIFTY ANALYSIS]",
+                            f"time={closed_timestamp.isoformat()}",
+                            f"signal={direction}",
+                            f"technical={result.get('technical_score')}",
+                            f"context={result.get('context_score')}",
+                            f"regime={result.get('market_regime')}",
+                            f"news={news_bias}",
+                            f"constituent={constituent_bias}",
+                            f"breadth={constituent_metrics.get('advancers', 0)}/{constituent_metrics.get('constituents_seen', 0)}",
+                            f"constituent_method={constituent_metrics.get('weighting', 'unavailable')}",
+                            f"candle_score={result.get('candlestick_score', 0)}",
+                            f"patterns={result.get('pattern_confirmation', [])}",
+                            f"reason={result.get('reason', '')}",
+                            flush=True,
+                        )
 
                         # Do not alert on setups that cannot reasonably complete
                         # before the NSE session closes. Keep this aligned with the
