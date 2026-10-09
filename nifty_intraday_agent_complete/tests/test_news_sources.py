@@ -18,6 +18,9 @@ class NewsSourcesTests(unittest.TestCase):
         self.assertIn("Business Standard", SOURCES)
         self.assertIn("LiveMint", SOURCES)
         self.assertIn("Moneycontrol", SOURCES)
+        self.assertIn("CNBC World", SOURCES)
+        self.assertIn("CNBC Markets", SOURCES)
+        self.assertIn("BBC Business", SOURCES)
 
     def test_headlines_receive_multiple_event_categories(self) -> None:
         categories = classify_categories(
@@ -35,6 +38,10 @@ class NewsSourcesTests(unittest.TestCase):
             classify("Company misses estimates; analyst cuts target price")[1],
             "BEARISH",
         )
+
+    def test_global_macro_events_are_categorized(self) -> None:
+        categories = classify_categories("US Treasury yields rise as Brent crude prices ease")
+        self.assertIn("GLOBAL_MACRO", categories)
 
     def test_global_news_bias_ignores_company_only_headlines(self) -> None:
         now_epoch = datetime(2026, 10, 8, 10, 0, tzinfo=timezone.utc).timestamp()
