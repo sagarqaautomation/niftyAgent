@@ -19,12 +19,16 @@ class CandleEngine:
     _OHLCV = ("open", "high", "low", "close", "volume")
 
     def __init__(self, max_rows: int = 500) -> None:
+        empty_index = pd.DatetimeIndex(
+            [], tz=settings.market_timezone, name="timestamp"
+        )
         self.max_rows = max_rows
         self.history = pd.DataFrame(
-            columns=self._OHLCV,
-            index=pd.DatetimeIndex(
-                [], tz=settings.market_timezone, name="timestamp"
-            ),
+            {
+                column: pd.Series(index=empty_index, dtype="float64")
+                for column in self._OHLCV
+            },
+            index=empty_index,
         )
         self.frames: dict[str, pd.DataFrame] = {
             "1min": pd.DataFrame(),
