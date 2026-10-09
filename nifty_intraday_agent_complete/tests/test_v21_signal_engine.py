@@ -11,7 +11,7 @@ class SignalEngineV21Tests(unittest.TestCase):
     def _frame(self) -> pd.DataFrame:
         index = pd.date_range(
             "2026-01-05 09:15",
-            periods=160,
+            periods=260,
             freq="min",
             tz="Asia/Kolkata",
         )
