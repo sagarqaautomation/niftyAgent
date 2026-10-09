@@ -20,7 +20,12 @@ class CandleEngine:
 
     def __init__(self, max_rows: int = 500) -> None:
         self.max_rows = max_rows
-        self.history = pd.DataFrame(columns=self._OHLCV)
+        self.history = pd.DataFrame(
+            columns=self._OHLCV,
+            index=pd.DatetimeIndex(
+                [], tz=settings.market_timezone, name="timestamp"
+            ),
+        )
         self.frames: dict[str, pd.DataFrame] = {
             "1min": pd.DataFrame(),
             "5min": pd.DataFrame(),
