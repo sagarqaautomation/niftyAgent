@@ -94,3 +94,86 @@ def summarize_constituent_returns(
         "weighting": weighting,
         "weighted_constituents": weighted_coverage,
     }
+
+
+def summarize_constituent_news(
+    items: list[Mapping[str, Any]],
+    weights: Mapping[str, float] | None,
+    max_age_minutes: int = 60,
+    now_epoch: float | None = None,
+) -> dict[str, Any]:
+    """Aggregate fresh company headlines by their configured index weights.
+
+    Headlines must have a publication timestamp and matched constituent symbols.
+    Sentiment is clipped per headline to limit keyword-count outliers. Weight
+    coverage is measured against the configured weights; without reliable
+    weights this returns NEUTRAL rather than inventing an index impact.
+    """
+    import re
+    import time
+
+    configured = {
+        str(symbol).upper(): float(weight)
+        for symbol, weight in (weights or {}).items()
+        if float(weight) > 0
+    }
+    if not configured:
+        return {
+            "bias": "NEUTRAL", "weighted_score": 0.0, "matched_headlines": 0,
+            "matched_constituents": 0, "weighting": "unavailable",
+        }
+
+    total_weight = sum(configured.values())
+    if total_weight <= 0:
+        return {
+            "bias": "NEUTRAL", "weighted_score": 0.0, "matched_headlines": 0,
+            "matched_constituents": 0, "weighting": "unavailable",
+        }
+
+    current = float(now_epoch if now_epoch is not None else time.time())
+    max_age = max(1, int(max_age_minutes)) * 60
+    seen: set[str] = set()
+    matched_symbols: set[str] = set()
+    score = 0.0
+    matched_headlines = 0
+
+    for item in items:
+        try:
+            published = float(item.get("published_epoch"))
+            sentiment = float(item.get("sentiment", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        age = current - published
+        if age < 0 or age > max_age:
+            continue
+        title_key = re.sub(r"\\W+", " ", str(item.get("title", "")).lower()).strip()
+        if not title_key or title_key in seen:
+            continue
+        symbols = {
+            str(value).upper()
+            for value in item.get("symbols", [])
+            if str(value).upper() in configured
+        }
+        if not symbols:
+            continue
+        seen.add(title_key)
+        clipped_sentiment = max(-3.0, min(3.0, sentiment))
+        if clipped_sentiment == 0:
+            continue
+        for symbol in symbols:
+            score += clipped_sentiment * configured[symbol] / total_weight
+            matched_symbols.add(symbol)
+        matched_headlines += 1
+
+    bias = "NEUTRAL"
+    if score >= 0.25:
+        bias = "BULLISH"
+    elif score <= -0.25:
+        bias = "BEARISH"
+    return {
+        "bias": bias,
+        "weighted_score": round(score, 4),
+        "matched_headlines": matched_headlines,
+        "matched_constituents": len(matched_symbols),
+        "weighting": "index_weighted",
+    }
