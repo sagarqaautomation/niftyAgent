@@ -7,6 +7,7 @@ weighted breadth and labels the weighting method explicitly.
 from __future__ import annotations
 
 import csv
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -60,7 +61,8 @@ def summarize_constituent_returns(
         for symbol, weight in (weights or {}).items()
         if symbol in clean and float(weight) > 0
     }
-    if valid_weights:
+    weights_cover_enough = len(valid_weights) >= max(3, math.ceil(count * 0.60))
+    if valid_weights and weights_cover_enough:
         total_weight = sum(valid_weights.values())
         mean_return = sum(clean[s] * w for s, w in valid_weights.items()) / total_weight
         weighting = "index_weighted"
