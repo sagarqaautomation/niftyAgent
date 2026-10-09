@@ -256,10 +256,20 @@ def build_signal(
     )
     bullish_patterns = [p["name"] for p in patterns if p["direction"] == "BULLISH"]
     bearish_patterns = [p["name"] for p in patterns if p["direction"] == "BEARISH"]
-    if bullish_patterns and not bearish_patterns and bull > bear:
-        reasons.append("bullish candlestick confirmation")
-    elif bearish_patterns and not bullish_patterns and bear > bull:
-        reasons.append("bearish candlestick confirmation")
+    # One capped point for a directional pattern on the latest completed
+    # candle. Multiple overlapping TA-Lib patterns do not multiply the score.
+    # Mixed bullish/bearish patterns are treated as a conflict, not confirmation.
+    candlestick_score = 0
+    if bullish_patterns and not bearish_patterns:
+        bull += 1
+        candlestick_score = 1
+        reasons.append("bullish candlestick confirmation (+1)")
+    elif bearish_patterns and not bullish_patterns:
+        bear += 1
+        candlestick_score = -1
+        reasons.append("bearish candlestick confirmation (+1)")
+    elif bullish_patterns and bearish_patterns:
+        reasons.append("conflicting candlestick patterns; no pattern score")
 
     technical_score = max(bull, bear)
     direction = "CALL" if bull > bear else "PUT" if bear > bull else "WAIT"
@@ -384,6 +394,9 @@ def build_signal(
         "signal": direction,
         "technical_score": int(technical_score),
         "context_score": int(context_score),
+        "candlestick_score": int(candlestick_score),
+        "bullish_patterns": bullish_patterns,
+        "bearish_patterns": bearish_patterns,
         "total_score": int(total_score),
         "reason": "; ".join(dict.fromkeys(reasons)) if reasons else "No strong setup",
         "analysis_state": direction,
