@@ -58,6 +58,16 @@ class NewsSourcesTests(unittest.TestCase):
         categories = classify_categories("US Treasury yields rise as Brent crude prices ease")
         self.assertIn("GLOBAL_MACRO", categories)
 
+    def test_company_headline_does_not_leak_into_macro_bias(self) -> None:
+        now = datetime(2026, 10, 8, 10, 0, tzinfo=timezone.utc)
+        items: list[NewsItem] = [{
+            "title": "TCS earnings surge amid global markets rally",
+            "published_epoch": now.timestamp() - 10,
+            "sentiment": 5,
+            "categories": ["EARNINGS", "GLOBAL_MACRO"],
+        }]
+        self.assertEqual(aggregate_news(items, now=now), "NEUTRAL")
+
     def test_global_news_bias_ignores_company_only_headlines(self) -> None:
         now_epoch = datetime(2026, 10, 8, 10, 0, tzinfo=timezone.utc).timestamp()
         items: list[NewsItem] = [
