@@ -62,6 +62,35 @@ class SignalEngineV21Tests(unittest.TestCase):
             "TRENDING", "TRANSITION", "RANGE", "HIGH_VOLATILITY", "UNKNOWN"
         })
 
+    def test_directional_candlestick_adds_one_capped_confirmation_point(self) -> None:
+        frame = add_indicators(self._frame())
+        five = add_indicators(
+            frame.resample("5min").agg(
+                open=("open", "first"),
+                high=("high", "max"),
+                low=("low", "min"),
+                close=("close", "last"),
+                volume=("volume", "sum"),
+            ).dropna()
+        )
+        bullish = build_signal(
+            frame, five, candlestick_patterns=[
+                {"name": "Bullish Engulfing", "direction": "BULLISH"},
+                {"name": "Hammer", "direction": "BULLISH"},
+            ]
+        )
+        self.assertEqual(bullish["candlestick_score"], 1)
+        self.assertIn("bullish candlestick confirmation (+1)", bullish["reason"])
+
+        conflicting = build_signal(
+            frame, five, candlestick_patterns=[
+                {"name": "Hammer", "direction": "BULLISH"},
+                {"name": "Shooting Star", "direction": "BEARISH"},
+            ]
+        )
+        self.assertEqual(conflicting["candlestick_score"], 0)
+        self.assertIn("conflicting candlestick patterns", conflicting["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()
