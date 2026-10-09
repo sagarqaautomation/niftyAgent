@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from market_context import load_constituent_weights, summarize_constituent_returns
+from market_context import load_constituent_weights, summarize_constituent_news, summarize_constituent_returns
 
 
 class MarketContextTests(unittest.TestCase):
@@ -29,6 +29,28 @@ class MarketContextTests(unittest.TestCase):
             path = Path(tmp) / "weights.csv"
             path.write_text("symbol,weight_pct\nTCS,4.1\nBAD,not-a-number\n", encoding="utf-8")
             self.assertEqual(load_constituent_weights(path), {"TCS": 4.1})
+
+    def test_constituent_news_uses_index_weights_and_fresh_articles(self):
+        now = 100000.0
+        items = [
+            {"title": "TCS raises guidance", "symbols": ["TCS"], "sentiment": 2, "published_epoch": now - 10},
+            {"title": "Old Infosys downgrade", "symbols": ["INFY"], "sentiment": -3, "published_epoch": now - 7200},
+        ]
+        result = summarize_constituent_news(
+            items, {"TCS": 10.0, "INFY": 90.0}, max_age_minutes=60, now_epoch=now
+        )
+        self.assertEqual(result["bias"], "NEUTRAL")
+        self.assertEqual(result["matched_headlines"], 1)
+        self.assertEqual(result["weighting"], "index_weighted")
+
+    def test_high_weight_constituent_news_has_more_index_impact(self):
+        now = 100000.0
+        tcs = [{"title": "TCS raises guidance", "symbols": ["TCS"], "sentiment": 2, "published_epoch": now - 10}]
+        infy = [{"title": "Infosys raises guidance", "symbols": ["INFY"], "sentiment": 2, "published_epoch": now - 10}]
+        tcs_result = summarize_constituent_news(tcs, {"TCS": 10.0, "INFY": 90.0}, now_epoch=now)
+        infy_result = summarize_constituent_news(infy, {"TCS": 10.0, "INFY": 90.0}, now_epoch=now)
+        self.assertEqual(tcs_result["bias"], "NEUTRAL")
+        self.assertEqual(infy_result["bias"], "BULLISH")
 
 
 if __name__ == "__main__":
