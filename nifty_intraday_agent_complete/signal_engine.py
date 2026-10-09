@@ -144,6 +144,7 @@ def build_signal(
     news_bias: str = "NEUTRAL",
     option_bias: str = "NEUTRAL",
     constituent_bias: str = "NEUTRAL",
+    constituent_news_bias: str = "NEUTRAL",
     use_volume_confirmation: bool = True,
     probability_model: dict[str, Any] | None = None,
     probability_threshold: float | None = None,
@@ -339,7 +340,11 @@ def build_signal(
         context_score += 1
     elif constituent_bias == "BEARISH":
         context_score -= 1
-    context_score = max(-3, min(3, context_score))
+    if constituent_news_bias == "BULLISH":
+        context_score += 1
+    elif constituent_news_bias == "BEARISH":
+        context_score -= 1
+    context_score = max(-4, min(4, context_score))
 
     if direction == "CALL" and context_score <= -2:
         direction = "WAIT"
@@ -408,6 +413,7 @@ def build_signal(
         "news_bias": news_bias,
         "option_bias": option_bias,
         "constituent_bias": constituent_bias,
+        "constituent_news_bias": constituent_news_bias,
         "market_regime": regime,
         "adx": adx if not pd.isna(adx) else None,
         "plus_di": plus_di if not pd.isna(plus_di) else None,
