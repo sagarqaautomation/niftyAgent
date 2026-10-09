@@ -1,5 +1,6 @@
 import calendar
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -173,12 +174,25 @@ def fetch_feed(source: str, url: str, limit: int = 30) -> list[NewsItem]:
 def fetch_all(
     aliases_by_symbol: Mapping[str, Sequence[str]] | None = None,
 ) -> list[NewsItem]:
-    items: list[NewsItem] = []
-    for source, url in SOURCES.items():
-        try:
-            items.extend(fetch_feed(source, url))
-        except Exception as exc:
-            print(f"News source failed: {source}: {exc}")
+    # Fetch feeds concurrently so adding global sources does not block the
+    # live market loop for many sequential HTTP timeouts.
+    items_by_source: dict[str, list[NewsItem]] = {}
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(SOURCES)))) as pool:
+        futures = {
+            pool.submit(fetch_feed, source, url): source
+            for source, url in SOURCES.items()
+        }
+        for future in as_completed(futures):
+            source = futures[future]
+            try:
+                items_by_source[source] = future.result()
+            except Exception as exc:
+                print(f"News source failed: {source}: {exc}")
+    items = [
+        item
+        for source in SOURCES
+        for item in items_by_source.get(source, [])
+    ]
     return tag_news_symbols(items, aliases_by_symbol or {})
 
 
