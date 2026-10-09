@@ -7,6 +7,7 @@ from news_sources import (
     aggregate_news,
     classify,
     classify_categories,
+    classify_market_context,
     equity_news_bias,
     tag_news_symbols,
 )
@@ -37,6 +38,20 @@ class NewsSourcesTests(unittest.TestCase):
         self.assertEqual(
             classify("Company misses estimates; analyst cuts target price")[1],
             "BEARISH",
+        )
+
+    def test_macro_driver_polarity_is_adjusted_for_indian_equities(self) -> None:
+        self.assertEqual(
+            classify_market_context("Brent crude prices fall after supply concerns ease")[1],
+            "BULLISH",
+        )
+        self.assertEqual(
+            classify_market_context("US Treasury yields surge to new highs")[1],
+            "BEARISH",
+        )
+        self.assertEqual(
+            classify_market_context("Wall Street stocks rally after strong earnings")[1],
+            "BULLISH",
         )
 
     def test_global_macro_events_are_categorized(self) -> None:
