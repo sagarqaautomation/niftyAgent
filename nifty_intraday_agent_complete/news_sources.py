@@ -86,6 +86,64 @@ def classify(text: str) -> tuple[int, Literal["BULLISH", "BEARISH", "NEUTRAL"]]:
     return score, "NEUTRAL"
 
 
+def classify_market_context(text: str, fallback_score: int = 0) -> tuple[int, Literal["BULLISH", "BEARISH", "NEUTRAL"]]:
+    """Map common macro-driver moves to their likely direction for Indian equities.
+
+    This is a transparent heuristic, not an ML sentiment model. It handles the
+    opposite impact of some variables (for example, falling crude is usually
+    supportive for an oil-importing market) and otherwise falls back to the
+    headline's general keyword score.
+    """
+    normalized = re.sub(r"[^a-z0-9$% ]+", " ", (text or "").lower())
+    has = lambda terms: any(term in normalized for term in terms)
+    up = ("rise", "rises", "rose", "rising", "surge", "surges", "surged",
+          "jump", "jumps", "jumped", "spike", "spikes", "spiked", "climb",
+          "climbs", "climbed", "soar", "soars", "soared", "higher", "gain",
+          "gains", "gained", "advance", "advances", "rally", "rallies")
+    down = ("fall", "falls", "fell", "falling", "drop", "drops", "dropped",
+            "decline", "declines", "declined", "ease", "eases", "eased",
+            "slip", "slips", "slipped", "tumble", "tumbles", "lower",
+            "weakens", "weakened", "selloff", "sell-off", "losses", "slump")
+    oil = ("crude oil", "brent", "wti", "oil prices", "oil futures")
+    yields = ("treasury yield", "treasury yields", "bond yield", "bond yields",
+              "government bond", "borrowing costs")
+    rupee = ("rupee", "indian currency", "inr")
+    global_equities = ("wall street", "s&p 500", "nasdaq", "dow jones",
+                       "asian stocks", "asia markets", "global markets",
+                       "us futures", "european markets", "equities")
+    if has(oil) and has(up):
+        return -2, "BEARISH"
+    if has(oil) and has(down):
+        return 2, "BULLISH"
+    if has(yields) and has(up):
+        return -2, "BEARISH"
+    if has(yields) and has(down):
+        return 2, "BULLISH"
+    if has(rupee) and has(("weakens", "weakened", "falls", "fell", "drops", "dropped", "record low")):
+        return -2, "BEARISH"
+    if has(rupee) and has(("strengthens", "strengthened", "rises", "rose", "gains", "gained", "firmer")):
+        return 2, "BULLISH"
+    if has(global_equities) and has(up):
+        return 2, "BULLISH"
+    if has(global_equities) and has(down):
+        return -2, "BEARISH"
+    if has(("war escalates", "attack", "airstrike", "invasion", "sanctions", "tariffs imposed",
+            "geopolitical tensions rise", "supply disruption")):
+        return -2, "BEARISH"
+    if has(("ceasefire", "peace deal", "trade deal", "tensions ease", "tariffs lifted",
+            "supply disruption eases")):
+        return 2, "BULLISH"
+    if has(("rbi hikes", "rbi raises", "repo rate hike", "rate hike", "tightens policy")):
+        return -2, "BEARISH"
+    if has(("rbi cuts", "repo rate cut", "rate cut", "eases policy")):
+        return 2, "BULLISH"
+    if fallback_score >= 2:
+        return fallback_score, "BULLISH"
+    if fallback_score <= -2:
+        return fallback_score, "BEARISH"
+    return fallback_score, "NEUTRAL"
+
+
 def _published_epoch(entry: Any) -> float | None:
     parsed = entry.get("published_parsed") or entry.get("updated_parsed")
     if parsed:
@@ -156,6 +214,8 @@ def fetch_feed(source: str, url: str, limit: int = 30) -> list[NewsItem]:
         score, bias = classify(title + " " + summary)
         published = entry.get("published") or entry.get("updated")
         categories = classify_categories(f"{title} {summary}")
+        if {"MARKET_MACRO", "GLOBAL_MACRO"}.intersection(categories):
+            score, bias = classify_market_context(title + " " + summary, score)
         items.append({
             "source": source,
             "title": title,
