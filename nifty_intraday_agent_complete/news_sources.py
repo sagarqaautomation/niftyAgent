@@ -217,7 +217,9 @@ def fetch_feed(source: str, url: str, limit: int = 30) -> list[NewsItem]:
         score, bias = classify(title + " " + summary)
         published = entry.get("published") or entry.get("updated")
         categories = classify_categories(f"{title} {summary}")
-        if {"MARKET_MACRO", "GLOBAL_MACRO"}.intersection(categories):
+        macro_categories = {"MARKET_MACRO", "GLOBAL_MACRO"}
+        company_categories = {"EARNINGS", "COMPANY_ANNOUNCEMENT", "ANALYST_ACTION", "SECTOR"}
+        if macro_categories.intersection(categories) and not company_categories.intersection(categories):
             score, bias = classify_market_context(title + " " + summary, score)
         items.append({
             "source": source,
