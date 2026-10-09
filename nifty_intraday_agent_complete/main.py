@@ -65,7 +65,7 @@ def refresh_news(
 def candle_record(
     timeframe: str,
     timestamp: pd.Timestamp | datetime | str,
-    row: pd.Series[Any],
+    row: pd.Series,
 ) -> CandleRecord:
     candle_time = pd.Timestamp(timestamp)
     if candle_time.tzinfo is not None:
@@ -82,7 +82,7 @@ def candle_record(
 def spot_candle_record(
     timeframe: str,
     timestamp: pd.Timestamp | datetime | str,
-    row: pd.Series[Any],
+    row: pd.Series,
 ) -> CandleRecord:
     candle_time = pd.Timestamp(timestamp)
     if candle_time.tzinfo is not None:
@@ -100,7 +100,7 @@ def equity_candle_record(
     symbol: str,
     timeframe: str,
     timestamp: pd.Timestamp | datetime | str,
-    row: pd.Series[Any],
+    row: pd.Series,
     patterns: list[dict[str, str]] | None = None,
 ) -> CandleRecord:
     return {
@@ -608,7 +608,7 @@ def main() -> None:
                 if last_equity_processed.get(equity_symbol) == closed_equity_time:
                     continue
                 last_equity_processed[equity_symbol] = closed_equity_time
-                equity_bar: pd.Series[Any] = closed_equity_minutes.iloc[-1]
+                equity_bar: pd.Series = closed_equity_minutes.iloc[-1]
                 equity_candle_rows = [
                     equity_candle_record(
                         equity_symbol,
