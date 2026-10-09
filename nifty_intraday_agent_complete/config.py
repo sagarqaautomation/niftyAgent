@@ -34,6 +34,7 @@ class Settings:
     equity_watchlist_path: str = os.getenv(
         "EQUITY_WATCHLIST_PATH", "data/equity_watchlist.csv"
     )
+    nifty50_weights_path: str = os.getenv("NIFTY50_WEIGHTS_PATH", "data/nifty50_weights.csv")
     whatsapp_enabled: bool = env_bool("WHATSAPP_ENABLED", False)
     twilio_account_sid: str = os.getenv("TWILIO_ACCOUNT_SID", "")
     twilio_auth_token: str = os.getenv("TWILIO_AUTH_TOKEN", "")
