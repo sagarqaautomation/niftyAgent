@@ -519,7 +519,8 @@ Kite historical candle timestamps represent the start of the candle, and Kite re
 
 ## Market-context and live validation (v2.1 accuracy engine)
 
-The live signal pipeline now has separate inputs for domestic/global news, the
+The live signal pipeline now has separate inputs for domestic/global news,
+fresh company-specific headlines weighted by configured index weights, the
 existing technical setup, directional candlestick confirmation, and the
 observed breadth of the configured equity watchlist. It continues to emit
 signals/alerts only; automatic order placement remains disabled by default.
