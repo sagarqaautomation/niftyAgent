@@ -516,3 +516,59 @@ Do not optimize parameters on the same period used for the final performance cla
 ### Important live-data note
 
 Kite historical candle timestamps represent the start of the candle, and Kite recommends building live candles from WebSocket data for live strategies. The v2.1 evaluator therefore treats the current live candle as mutable and only evaluates completed candles.
+
+## Market-context and live validation (v2.1 accuracy engine)
+
+The live signal pipeline now has separate inputs for domestic/global news, the
+existing technical setup, directional candlestick confirmation, and the
+observed breadth of the configured equity watchlist. It continues to emit
+signals/alerts only; automatic order placement remains disabled by default.
+
+### Global and domestic news
+The RSS reader includes Indian market feeds plus CNBC World, CNBC Markets, and
+BBC Business. Feeds are fetched concurrently so a slow feed does not serially
+delay all other sources. Headlines with global macro terms are included in the
+macro news aggregate. This is a lightweight keyword sentiment model, not a
+financial-language model: verify headline polarity and source health before
+using it for trading decisions.
+
+### Constituent breadth and index weights
+The agent calculates each configured equity's most recently closed 1-minute
+return and derives a breadth bias only when at least 10 symbols are available
+and at least 60% are advancing or declining. The live log records the number
+of advancers, observed symbols, context bias, and weighting method.
+
+For genuine index-weighted impact, provide a maintained
+`data/nifty50_weights.csv` file with columns `symbol,weight_pct`. Use current
+official NIFTY 50 constituent weights from an authoritative NSE source and
+refresh them after index rebalances. If no file exists—or fewer than 60% of
+the observed symbols have valid weights—the engine explicitly falls back to
+equal-weighted breadth. It does not fabricate index weights. The configured
+equity watchlist must contain the NIFTY 50 universe for this to represent full
+NIFTY constituent breadth; a smaller custom watchlist is only a watchlist
+breadth proxy.
+
+### Candlestick scoring
+A directional pattern on the latest completed candle contributes at most one
+technical point, even if multiple overlapping patterns fire. Simultaneous
+bullish and bearish patterns add no point and are reported as a conflict.
+Pattern confirmation is one feature among trend, VWAP, momentum, volume and
+structure—not a standalone entry rule.
+
+### Live diagnostics
+Each closed NIFTY candle prints a `[NIFTY ANALYSIS]` line with signal,
+technical/context scores, regime, news bias, constituent breadth/method,
+candlestick score/patterns, and reasons. Review these logs with the agent
+running in `LIVE_MARKET_DATA=true` and the Kite session configured. This
+repository connection cannot access a separately running local Kite session
+or its private credentials, so it cannot verify your live broker ticks from
+the GitHub repository alone.
+
+### Validation cautions
+GitHub Actions runs unit tests on push. A passing unit suite checks code
+behavior; it does not establish a profitable strategy. Before enabling any
+new gate, compare baseline versus news, breadth and candlestick variants using
+the same point-in-time data, walk-forward splits, separate CALL/PUT metrics,
+slippage/fees, and out-of-sample periods. Never use current constituent
+weights or later-published headlines in historical rows where they were not
+yet available.
