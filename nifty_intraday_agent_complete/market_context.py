@@ -34,6 +34,7 @@ def summarize_constituent_returns(
     returns_pct: Mapping[str, float],
     weights: Mapping[str, float] | None = None,
     min_constituents: int = 10,
+    min_weight_constituents: int = 40,
 ) -> dict[str, Any]:
     """Summarize completed 1-minute constituent returns without look-ahead.
 
@@ -61,8 +62,13 @@ def summarize_constituent_returns(
         for symbol, weight in (weights or {}).items()
         if symbol in clean and float(weight) > 0
     }
+    configured_weights = {str(s).upper(): float(w) for s, w in (weights or {}).items() if float(w) > 0}
+    complete_weight_file = (
+        len(configured_weights) >= min_weight_constituents
+        and 70.0 <= sum(configured_weights.values()) <= 120.0
+    )
     weights_cover_enough = len(valid_weights) >= max(3, math.ceil(count * 0.60))
-    if valid_weights and weights_cover_enough:
+    if valid_weights and weights_cover_enough and complete_weight_file:
         total_weight = sum(valid_weights.values())
         mean_return = sum(clean[s] * w for s, w in valid_weights.items()) / total_weight
         weighting = "index_weighted"
@@ -101,6 +107,7 @@ def summarize_constituent_news(
     weights: Mapping[str, float] | None,
     max_age_minutes: int = 60,
     now_epoch: float | None = None,
+    min_weight_constituents: int = 40,
 ) -> dict[str, Any]:
     """Aggregate fresh company headlines by their configured index weights.
 
@@ -124,7 +131,7 @@ def summarize_constituent_news(
         }
 
     total_weight = sum(configured.values())
-    if total_weight <= 0:
+    if len(configured) < min_weight_constituents or not 70.0 <= total_weight <= 120.0 or total_weight <= 0:
         return {
             "bias": "NEUTRAL", "weighted_score": 0.0, "matched_headlines": 0,
             "matched_constituents": 0, "weighting": "unavailable",
