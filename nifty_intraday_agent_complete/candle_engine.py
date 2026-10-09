@@ -32,6 +32,7 @@ class CandleEngine:
         }
         self._active_minute: pd.Timestamp | None = None
         self._active_bar: dict[str, float] | None = None
+        self._last_tick_timestamp: pd.Timestamp | None = None
 
     def load_history(
         self, candles: Sequence[Mapping[str, Any]]
@@ -59,6 +60,7 @@ class CandleEngine:
         ].tail(self.max_rows)
         self._active_minute = None
         self._active_bar = None
+        self._last_tick_timestamp = None
         self._update_frames(self.history)
         return self.frames
 
@@ -103,6 +105,14 @@ class CandleEngine:
         else:
             timestamp = timestamp.tz_convert(settings.market_timezone)
 
+        # Do not let delayed ticks overwrite the close of a candle that has
+        # already advanced, even when the delayed tick is in the same minute.
+        if (
+            self._last_tick_timestamp is not None
+            and timestamp < self._last_tick_timestamp
+        ):
+            return self.frames if not self.frames["1min"].empty else None
+
         minute_start = timestamp.floor("min")
         tick_price = float(price)
         tick_volume = max(0.0, float(volume or 0.0))
@@ -117,8 +127,6 @@ class CandleEngine:
                 "volume": tick_volume,
             }
         elif minute_start < self._active_minute:
-            # Ignore delayed/out-of-order ticks rather than rewriting a candle
-            # after it has rolled over and may already have been evaluated.
             return self.frames if not self.frames["1min"].empty else None
         elif minute_start == self._active_minute:
             assert self._active_bar is not None
@@ -146,5 +154,6 @@ class CandleEngine:
                 "volume": tick_volume,
             }
 
+        self._last_tick_timestamp = timestamp
         self._update_frames(self._frame_with_active_bar())
         return self.frames
