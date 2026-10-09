@@ -286,6 +286,9 @@ def aggregate_news(
         float(item.get("sentiment", 0) or 0)
         for item in unique.values()
         if {"MARKET_MACRO", "GLOBAL_MACRO"}.intersection(item.get("categories", []))
+        and not {"EARNINGS", "COMPANY_ANNOUNCEMENT", "ANALYST_ACTION"}.intersection(
+            item.get("categories", [])
+        )
     )
     if score >= 3:
         return "BULLISH"
