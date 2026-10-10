@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS news (
     fetched_at TEXT NOT NULL,
     sentiment REAL,
     market_bias TEXT,
+    summary TEXT,
+    event_categories_json TEXT NOT NULL DEFAULT '[]',
+    symbols_json TEXT NOT NULL DEFAULT '[]',
+    published_epoch REAL,
     UNIQUE(source, title)
 );
 

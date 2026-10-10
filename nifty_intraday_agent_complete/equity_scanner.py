@@ -60,6 +60,8 @@ def build_equity_buy_signal(
     frames: dict[str, pd.DataFrame],
     live_price: float,
     news_bias: str = "NEUTRAL",
+    one_minute_pattern_rows: dict[pd.Timestamp, list[dict[str, str]]] | None = None,
+    five_minute_pattern_rows: dict[pd.Timestamp, list[dict[str, str]]] | None = None,
 ) -> dict[str, Any] | None:
     minute_frame = frames["1min"]
     five_minute_frame = frames["5min"]
@@ -76,12 +78,29 @@ def build_equity_buy_signal(
     if closed_minutes.empty or closed_five_minutes.empty:
         return None
 
-    analysis = build_signal(closed_minutes, closed_five_minutes, news_bias, "NEUTRAL")
+    latest_one_minute = cast(pd.Timestamp, closed_minutes.index[-1])
+    one_minute_patterns = (
+        detect_latest_candlestick_patterns(closed_minutes)
+        if one_minute_pattern_rows is None
+        else one_minute_pattern_rows.get(latest_one_minute, [])
+    )
+    analysis = build_signal(
+        closed_minutes,
+        closed_five_minutes,
+        news_bias,
+        "NEUTRAL",
+        candlestick_patterns=one_minute_patterns,
+    )
     if analysis["signal"] != "CALL":
         return None
 
-    one_minute_patterns = detect_latest_candlestick_patterns(closed_minutes)
-    five_minute_patterns = detect_latest_candlestick_patterns(closed_five_minutes)
+    five_minute_patterns = (
+        detect_latest_candlestick_patterns(closed_five_minutes)
+        if five_minute_pattern_rows is None
+        else five_minute_pattern_rows.get(
+            cast(pd.Timestamp, closed_five_minutes.index[-1]), []
+        )
+    )
     matched_patterns = one_minute_patterns + five_minute_patterns
     bullish_patterns = [
         pattern for pattern in matched_patterns
