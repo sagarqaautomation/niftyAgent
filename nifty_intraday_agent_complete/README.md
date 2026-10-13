@@ -23,6 +23,14 @@ A VS Code-ready Python project for a **research/alert-only** NIFTY intraday moni
 
 ---
 
+- Captures best-effort pre-market context (GIFT Nifty when provider-supported, India VIX, global indices, market breadth and fresh news) into SQLite snapshots and signal-time feature records.
+
+## Pre-market intelligence
+
+When `LIVE_MARKET_DATA=true`, the worker refreshes pre-market context every five minutes by default. Configure `PREMARKET_GIFT_NIFTY_QUOTE` only if your Kite/provider account exposes a supported GIFT Nifty quote. The collector does not guess missing readings. India VIX is used as a volatility regime, not a direction signal; current-session breadth is not used before 09:15 IST.
+
+With the API running, inspect `/premarket/latest` or `/premarket/history?limit=50`. The context is stored alongside signal feature snapshots for later ML experiments, but it does not change CALL/PUT/WAIT decisions until validated with walk-forward testing.
+
 ## 1. Requirements
 
 Recommended:
