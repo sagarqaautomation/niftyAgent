@@ -826,6 +826,8 @@ def main() -> None:
                                 quality.news_max_age_minutes,
                             )
                             constituent_news_bias = str(constituent_news_metrics["bias"])
+                            with premarket_lock:
+                                current_premarket_context = dict(premarket_context_state)
                             result = process_frames(
                                 {"1min": closed_minute, "5min": closed_five},
                                 news_bias,
@@ -841,7 +843,7 @@ def main() -> None:
                                 constituent_metrics,
                                 constituent_news_bias,
                                 constituent_news_metrics,
-                                dict(premarket_context_state),
+                                current_premarket_context,
                             )
                         except Exception as exc:
                             update_analysis_status(
