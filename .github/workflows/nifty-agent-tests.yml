@@ -92,6 +92,31 @@ jobs:
           Required columns: `timestamp,open,high,low,close,volume`.
           SUMMARY
           fi
+      - name: Validate historical dataset and report coverage
+        if: steps.data.outputs.available == 'true'
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          from pathlib import Path
+
+          path = Path("data/nifty_1m.csv")
+          frame = pd.read_csv(path)
+          required = {"timestamp", "open", "high", "low", "close", "volume"}
+          missing = sorted(required - set(frame.columns))
+          if missing:
+              raise SystemExit(f"CSV missing required columns: {missing}")
+          if frame.empty:
+              raise SystemExit("Historical CSV is empty.")
+          frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+          invalid_timestamps = int(frame["timestamp"].isna().sum())
+          if invalid_timestamps:
+              raise SystemExit(f"CSV contains {invalid_timestamps} invalid timestamps.")
+          print(f"CSV rows: {len(frame):,}")
+          print(f"Date range: {frame['timestamp'].min()} -> {frame['timestamp'].max()}")
+          print(f"Unique trading dates: {frame['timestamp'].dt.date.nunique():,}")
+          print(f"Duplicate timestamps: {int(frame['timestamp'].duplicated().sum()):,}")
+          print(f"Non-zero volume rows: {int(pd.to_numeric(frame['volume'], errors='coerce').fillna(0).ne(0).sum()):,}")
+          PY
       - name: Run walk-forward backtest with estimated costs
         if: steps.data.outputs.available == 'true'
         run: |
