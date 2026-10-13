@@ -1,18 +1,14 @@
 name: NiftyAgent tests
 
-# Keep every push on this branch testable. Do not cancel an in-progress run
-# just because another commit is pushed; each commit should get its own result.
+# Run tests for every push and pull request on branches containing this workflow.
+# Give each commit its own run so newer changes do not cancel earlier results.
 concurrency:
   group: nifty-agent-tests-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 on:
   push:
-    branches:
-      - v2.1-accuracy-engine
   pull_request:
-    branches:
-      - v2.1-accuracy-engine
   workflow_dispatch:
 
 jobs:
