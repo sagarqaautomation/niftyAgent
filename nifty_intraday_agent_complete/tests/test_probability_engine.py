@@ -34,7 +34,7 @@ class ProbabilityEngineTests(unittest.TestCase):
         good_probability, evidence = predict(model, {"direction": "CALL", "regime": "TREND"})
         bad_probability, _ = predict(model, {"direction": "CALL", "regime": "RANGE"})
 
-        self.assertEqual(model["method"], "regularized_logistic_regression")
+        self.assertEqual(model["method"], "smoothed_additive_log_odds")
         self.assertGreater(evidence, 40)
         self.assertGreater(good_probability or 0, 0.6)
         self.assertLess(bad_probability or 1, 0.4)
