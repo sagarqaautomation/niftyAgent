@@ -48,6 +48,9 @@ class Trade:
     vwap_distance_pct: float | None = None
     candle_strength: float | None = None
     structure: str | None = None
+    pattern_hammer: bool = False
+    pattern_morning_star: bool = False
+    pattern_bullish_engulfing: bool = False
 
 
 def load_ohlcv_csv(path: str | Path) -> pd.DataFrame:
@@ -276,6 +279,9 @@ def run_backtest(
             vwap_distance_pct=((entry_price - float(one.iloc[i]["vwap"])) / entry_price * 100) if not pd.isna(one.iloc[i]["vwap"]) else None,
             candle_strength=_optional_float(one.iloc[i].get("body_pct")),
             structure=("BULL_BREAKOUT" if not pd.isna(one.iloc[i].get("opening_range_high")) and float(one.iloc[i]["close"]) > float(one.iloc[i]["opening_range_high"]) else "BEAR_BREAKDOWN" if not pd.isna(one.iloc[i].get("opening_range_low")) and float(one.iloc[i]["close"]) < float(one.iloc[i]["opening_range_low"]) else "NONE"),
+            pattern_hammer=any(p.get("name") == "Hammer" and p.get("direction") == "BULLISH" for p in signal.get("pattern_confirmation", [])),
+            pattern_morning_star=any(p.get("name") == "Morning Star" and p.get("direction") == "BULLISH" for p in signal.get("pattern_confirmation", [])),
+            pattern_bullish_engulfing=any(p.get("name") == "Bullish Engulfing" and p.get("direction") == "BULLISH" for p in signal.get("pattern_confirmation", [])),
         )
         trade = _resolve_trade(trade, one.iloc[i + 1 :])
         trade.net_r_multiple = net_r_multiple(
