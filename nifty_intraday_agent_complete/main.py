@@ -26,6 +26,7 @@ from news_sources import (
 )
 from candle_engine import CandleEngine
 from signal_engine import build_signal, add_risk_levels
+from probability_engine import load_model
 from indicators import detect_candlestick_pattern_rows, detect_latest_candlestick_patterns
 from market_context import load_constituent_weights, summarize_constituent_news, summarize_constituent_returns
 from equity_scanner import (
@@ -39,6 +40,34 @@ NewsItem = dict[str, Any]
 CandleFrames = dict[str, pd.DataFrame]
 CandleRecord = dict[str, Any]
 Tick = Mapping[str, Any]
+
+_live_trade_quality_model_cache: dict[str, Any] | None = None
+_live_trade_quality_model_loaded = False
+
+def live_trade_quality_model() -> dict[str, Any] | None:
+    """Load an explicitly configured offline-trained quality model once.
+
+    The model is opt-in: an unset path or invalid/missing file leaves existing
+    signal behavior unchanged. Restart the worker to load a newly trained file.
+    """
+    global _live_trade_quality_model_cache, _live_trade_quality_model_loaded
+    if _live_trade_quality_model_loaded:
+        return _live_trade_quality_model_cache
+    _live_trade_quality_model_loaded = True
+    path = settings.trade_quality_model_path
+    if not path:
+        return None
+    model = load_model(path)
+    if not model:
+        print(f"Trade-quality model not loaded from {path}; live filter remains disabled", flush=True)
+        return None
+    if not isinstance(model.get("vetoes"), list):
+        print(f"Trade-quality model at {path} has an invalid schema; live filter remains disabled", flush=True)
+        return None
+    _live_trade_quality_model_cache = model
+    print(f"Loaded trade-quality model from {path} ({model.get('samples', 0)} resolved samples)", flush=True)
+    return model
+
 
 def refresh_news(
     aliases_by_symbol: Mapping[str, Sequence[str]] | None = None,
@@ -189,6 +218,7 @@ def process_frames(
         df1, df5, news_bias, option_bias,
         constituent_bias=constituent_bias,
         constituent_news_bias=constituent_news_bias,
+        trade_quality_model=live_trade_quality_model(),
     )
     signal["constituent_metrics"] = dict(constituent_metrics or {})
     signal["constituent_news_metrics"] = dict(constituent_news_metrics or {})
