@@ -1,8 +1,11 @@
 # Pre-market intelligence (research feature)
 
-This feature adds a provider-agnostic pre-market context scorer for the
-`v2.1-accuracy-engine` line. It does **not** place orders or claim to fetch live
-market data. A data adapter must supply observations from a licensed provider.
+This feature adds a pre-market scorer and best-effort live collector to the
+`v2.1-accuracy-engine` line. It does **not** place orders. The collector uses
+Kite quotes for India VIX and an optional configured GIFT Nifty quote key, Yahoo
+Finance daily chart data for global index context, the configured NIFTY 50
+weights file for breadth, and timestamped items from the existing news pipeline.
+Provider availability and licensing can vary; unavailable fields are left missing.
 
 ## Inputs to collect (with observation timestamps)
 
@@ -29,20 +32,21 @@ inputs are excluded and the remaining weights renormalized. With fewer than
 two directional components, the result is `INSUFFICIENT_DATA`. It never emits
 a CALL/PUT order instruction.
 
-## Integration and validation plan
+## Current integration
 
-1. Implement separate provider adapters for GIFT Nifty, VIX, global indices,
-   breadth and timestamped news. Store source, observed_at, fetched_at and
-   missing/error status for every observation.
-2. Persist the pre-market snapshot before the open and immutable intraday
-   snapshots thereafter. Do not overwrite historical observations.
-3. Add these values as candidate ML features alongside existing technical
-   features; keep the current live CALL/PUT/WAIT engine unchanged initially.
-4. Compare baseline vs pre-market features vs full-context features using
-   chronological walk-forward validation. Report trade count, win rate,
-   expectancy after costs, drawdown, and CALL/PUT breakdown.
-5. Test stability by month and volatility regime; do not tune on the final
-   holdout. Only promote features that improve out-of-sample results.
+- `premarket_collector.py` collects best-effort inputs every `PREMARKET_REFRESH_SECONDS` (default 300 seconds) while live mode runs.
+- Snapshots are appended to SQLite `premarket_snapshots`; they are not overwritten.
+- `GET /premarket/latest` returns the latest snapshot and `GET /premarket/history?limit=50` returns recent snapshots.
+- The latest snapshot is included in each NIFTY signal's feature snapshot, with flat numeric candidate fields for later model datasets. The current CALL/PUT/WAIT logic is not changed by this context score.
+- Before 09:15 IST, the collector deliberately excludes current-session breadth because live constituent prices are not yet available. After the open, it uses available quote changes versus previous close.
+
+## Remaining validation
+
+1. Confirm the Kite account exposes `NSE:INDIA VIX`; configure `PREMARKET_GIFT_NIFTY_QUOTE` only if your provider actually exposes a supported GIFT Nifty instrument. GIFT Nifty is otherwise unavailable rather than guessed.
+2. Ensure `data/nifty50_weights.csv` is current and its symbols match Kite quote symbols. Missing/invalid weights reduce breadth reliability.
+3. Run the unit tests and a live smoke test in the user's configured environment; external quote endpoints and broker credentials are not available in this code-editing session.
+4. Export resolved, timestamped signals and compare baseline vs pre-market candidate features with chronological walk-forward validation. Report trade count, hit rate, expectancy after costs, drawdown and CALL/PUT breakdown.
+5. Test stability by month and volatility regime; do not tune on the final holdout. Only promote model features that improve out-of-sample results.
 
 ## Example
 
