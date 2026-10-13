@@ -56,8 +56,11 @@ def fit_probability_model(trades: list[dict[str,Any]], min_bucket_samples:int=20
         for key, vals in groups.items():
             count=len(vals)
             if count<min_bucket_samples: continue
-            raw=(sum(vals)+prior_strength*prior)/(count+prior_strength)
-            shrink=count/(count+prior_strength)
+            # Joint direction/regime setups carry interaction information that
+            # disappears when each dimension is smoothed independently.
+            strength = max(1, prior_strength // 2) if name == "direction_regime" else prior_strength
+            raw=(sum(vals)+strength*prior)/(count+strength)
+            shrink=count/(count+strength)
             out[key]={"samples":count,"win_rate":round(sum(vals)/count,6),"contribution":round((_logit(raw)-base)*shrink,6)}
         features[name]=out
     return {"version":2,"method":"smoothed_additive_log_odds","samples":n,"prior":round(prior,6),"min_bucket_samples":min_bucket_samples,"prior_strength":prior_strength,"features":features}
