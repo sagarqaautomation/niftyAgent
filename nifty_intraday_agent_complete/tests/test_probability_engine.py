@@ -39,6 +39,36 @@ class ProbabilityEngineTests(unittest.TestCase):
         self.assertGreater(good_probability or 0, 0.6)
         self.assertLess(bad_probability or 1, 0.4)
 
+    def test_individual_candlestick_feature_changes_probability(self) -> None:
+        trades = []
+        for _ in range(30):
+            trades.append({
+                "direction": "CALL", "regime": "TREND", "status": "SUCCESS",
+                "hour": 10, "adx": 23, "rsi": 60, "relative_volume": 1.1,
+                "vwap_distance_pct": 0.2, "candle_strength": 0.6,
+                "structure": "NONE", "pattern_hammer": True,
+            })
+            trades.append({
+                "direction": "CALL", "regime": "TREND", "status": "FAILED",
+                "hour": 10, "adx": 23, "rsi": 60, "relative_volume": 1.1,
+                "vwap_distance_pct": 0.2, "candle_strength": 0.6,
+                "structure": "NONE", "pattern_hammer": False,
+            })
+
+        model = fit_probability_model(trades)
+        with_hammer, _ = predict(model, {
+            "direction": "CALL", "regime": "TREND", "hour": 10, "adx": 23,
+            "rsi": 60, "relative_volume": 1.1, "vwap_distance_pct": 0.2,
+            "candle_strength": 0.6, "structure": "NONE", "pattern_hammer": True,
+        })
+        without_hammer, _ = predict(model, {
+            "direction": "CALL", "regime": "TREND", "hour": 10, "adx": 23,
+            "rsi": 60, "relative_volume": 1.1, "vwap_distance_pct": 0.2,
+            "candle_strength": 0.6, "structure": "NONE", "pattern_hammer": False,
+        })
+
+        self.assertGreater(with_hammer or 0, without_hammer or 1)
+
     def test_predict_remains_compatible_with_saved_v2_model(self) -> None:
         model = {
             "version": 2,
