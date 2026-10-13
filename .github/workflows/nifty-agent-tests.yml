@@ -1,8 +1,10 @@
 name: NiftyAgent tests
 
+# Keep every push on this branch testable. Do not cancel an in-progress run
+# just because another commit is pushed; each commit should get its own result.
 concurrency:
-  group: nifty-agent-tests-${{ github.ref }}
-  cancel-in-progress: true
+  group: nifty-agent-tests-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
 
 on:
   push:
