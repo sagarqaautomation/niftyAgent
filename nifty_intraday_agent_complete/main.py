@@ -16,7 +16,7 @@ from database import (
     resolve_equity_signal,
     expire_stale_equity_signals, list_equity_signals_by_status,
     resolve_equity_signal_at_price,
-    update_analysis_status, utc_now
+    update_analysis_status, utc_now, insert_premarket_snapshot
 )
 from news_sources import (
     aggregate_news,
@@ -172,6 +172,7 @@ def process_frames(
     constituent_metrics: Mapping[str, Any] | None = None,
     constituent_news_bias: str = "NEUTRAL",
     constituent_news_metrics: Mapping[str, Any] | None = None,
+    premarket_context: Mapping[str, Any] | None = None,
 ) -> Signal | None:
     df1 = frames["1min"]
     df5 = frames["5min"]
@@ -222,6 +223,7 @@ def process_frames(
         "constituent_metrics": dict(constituent_metrics or {}),
         "constituent_news_bias": constituent_news_bias,
         "constituent_news_metrics": dict(constituent_news_metrics or {}),
+        "premarket_context": dict(premarket_context or {}),
         "one_minute": feature_snapshot(df1),
         "five_minute": feature_snapshot(df5),
     }
@@ -411,6 +413,46 @@ def main() -> None:
         print(f"Loaded NIFTY constituent weights for {len(constituent_weights)} symbols")
     else:
         print("NIFTY weights file unavailable; constituent context will use equal-weight breadth")
+
+    premarket_context_state: dict[str, Any] = {}
+    premarket_lock = threading.RLock()
+    premarket_stop = threading.Event()
+
+    def refresh_premarket_loop() -> None:
+        if not settings.premarket_enabled:
+            print("Pre-market intelligence is disabled (PREMARKET_ENABLED=false)")
+            return
+        from premarket_collector import collect_live_premarket_context
+
+        while not premarket_stop.is_set():
+            try:
+                snapshot = collect_live_premarket_context(
+                    broker, news_items=news_items, weights=constituent_weights
+                )
+                insert_premarket_snapshot(snapshot)
+                with premarket_lock:
+                    premarket_context_state.clear()
+                    premarket_context_state.update(snapshot)
+                print(
+                    "[PREMARKET]",
+                    f"time={snapshot.get('observed_at')}",
+                    f"bias={snapshot.get('directional_bias')}",
+                    f"score={snapshot.get('directional_score')}",
+                    f"vix={snapshot.get('india_vix')}",
+                    f"volatility={snapshot.get('volatility_regime')}",
+                    f"components={snapshot.get('available_components')}",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(f"Pre-market refresh failed: {type(exc).__name__}: {exc}", flush=True)
+            premarket_stop.wait(settings.premarket_refresh_seconds)
+
+    if settings.premarket_enabled:
+        threading.Thread(
+            target=refresh_premarket_loop,
+            name="premarket-context-refresh",
+            daemon=True,
+        ).start()
 
     try:
         history_end = pd.Timestamp.now(tz=settings.market_timezone).to_pydatetime()
@@ -799,6 +841,7 @@ def main() -> None:
                                 constituent_metrics,
                                 constituent_news_bias,
                                 constituent_news_metrics,
+                                dict(premarket_context_state),
                             )
                         except Exception as exc:
                             update_analysis_status(
