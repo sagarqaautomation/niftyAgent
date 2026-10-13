@@ -35,6 +35,10 @@ class Settings:
         "EQUITY_WATCHLIST_PATH", "data/equity_watchlist.csv"
     )
     nifty50_weights_path: str = os.getenv("NIFTY50_WEIGHTS_PATH", "data/nifty50_weights.csv")
+    premarket_enabled: bool = env_bool("PREMARKET_ENABLED", True)
+    premarket_refresh_seconds: int = max(60, int(os.getenv("PREMARKET_REFRESH_SECONDS", "300")))
+    premarket_gift_nifty_quote: str = os.getenv("PREMARKET_GIFT_NIFTY_QUOTE", "").strip()
+    premarket_news_max_age_minutes: int = max(1, int(os.getenv("PREMARKET_NEWS_MAX_AGE_MINUTES", "120")))
     whatsapp_enabled: bool = env_bool("WHATSAPP_ENABLED", False)
     twilio_account_sid: str = os.getenv("TWILIO_ACCOUNT_SID", "")
     twilio_auth_token: str = os.getenv("TWILIO_AUTH_TOKEN", "")
