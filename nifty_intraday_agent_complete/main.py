@@ -211,8 +211,10 @@ def process_frames(
                 snapshot[field] = float(value)
         return snapshot
 
+    premarket = dict(premarket_context or {})
+    premarket_components = premarket.get("components") or {}
     signal["feature_snapshot"] = {
-        "version": 2,
+        "version": 3,
         "signal_candle_time": df1.index[-1].isoformat(),
         "market_regime": signal.get("market_regime"),
         "technical_score": signal.get("technical_score"),
@@ -223,7 +225,17 @@ def process_frames(
         "constituent_metrics": dict(constituent_metrics or {}),
         "constituent_news_bias": constituent_news_bias,
         "constituent_news_metrics": dict(constituent_news_metrics or {}),
-        "premarket_context": dict(premarket_context or {}),
+        "premarket_context": premarket,
+        # Flat numeric candidate features simplify later CSV/model experiments.
+        "premarket_directional_score": premarket.get("directional_score"),
+        "premarket_india_vix": premarket.get("india_vix"),
+        "premarket_india_vix_change_pct": premarket.get("india_vix_change_pct"),
+        "premarket_gift_nifty_component": premarket_components.get("gift_nifty"),
+        "premarket_global_component": premarket_components.get("global_sentiment"),
+        "premarket_breadth_component": premarket_components.get("market_breadth"),
+        "premarket_news_component": premarket_components.get("news_sentiment"),
+        "premarket_volatility_high": int(premarket.get("volatility_regime") == "HIGH"),
+        "premarket_volatility_elevated": int(premarket.get("volatility_regime") == "ELEVATED"),
         "one_minute": feature_snapshot(df1),
         "five_minute": feature_snapshot(df5),
     }
