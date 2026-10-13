@@ -581,3 +581,28 @@ the same point-in-time data, walk-forward splits, separate CALL/PUT metrics,
 slippage/fees, and out-of-sample periods. Never use current constituent
 weights or later-published headlines in historical rows where they were not
 yet available.
+
+
+## Phase 1 model integration (v2.1)
+
+The optional trade-quality model can be fitted from resolved historical NIFTY
+signals and then loaded by the live worker as a conservative veto filter. It
+does not generate CALL/PUT directions or override the existing score, context,
+precision, and risk checks. Leave `TRADE_QUALITY_MODEL_PATH` empty until the
+model has passed chronological walk-forward validation; the live filter is
+disabled by default.
+
+Example commands from this project directory:
+
+```powershell
+python backtester.py data/nifty_1m.csv --fit-probability-model data/setup_profiles.json
+python backtester.py data/nifty_1m.csv --fit-trade-quality-model data/trade_quality_model.json
+python backtester.py data/nifty_1m.csv --walk-forward --folds 5 --progress --round-trip-cost-points 2
+```
+
+Set `TRADE_QUALITY_MODEL_PATH=data/trade_quality_model.json` only after
+reviewing sample counts and out-of-sample performance, then restart the worker.
+The round-trip cost value is an estimate in underlying price points, not an
+option-premium or brokerage quote; replace it with a defensible estimate for
+your actual instrument and execution assumptions. Keep `AUTO_ORDER_PLACEMENT=false`
+during validation. Model fitting and historical tests do not prove live accuracy.
