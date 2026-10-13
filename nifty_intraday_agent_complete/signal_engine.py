@@ -380,10 +380,14 @@ def build_signal(
             direction = "WAIT"
             reasons.extend(quality_failures)
     setup_key = _setup_key(direction, regime, adx, rsi, rel_volume, vwap_distance_pct, strength, structure, int(signal_hour)) if direction != "WAIT" else None
+    pattern_names = {str(pattern.get("name", "")).casefold() for pattern in patterns}
     feature_snapshot: dict[str, Any] = {
         "direction": direction, "regime": regime, "adx": adx, "rsi": rsi,
         "relative_volume": rel_volume, "vwap_distance_pct": vwap_distance_pct,
         "candle_strength": strength, "structure": structure, "hour": int(signal_hour),
+        "pattern_hammer": "hammer" in pattern_names,
+        "pattern_morning_star": "morning star" in pattern_names,
+        "pattern_bullish_engulfing": "bullish engulfing" in pattern_names,
     }
     historical_probability, historical_samples = _historical_probability(feature_snapshot, probability_model) if direction != "WAIT" else (None, 0)
     if direction != "WAIT" and (quality.probability_gate_enabled or probability_model is not None):
