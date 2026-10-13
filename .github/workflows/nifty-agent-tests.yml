@@ -60,6 +60,9 @@ jobs:
           KITE_ACCESS_TOKEN: ${{ secrets.KITE_ACCESS_TOKEN }}
         shell: bash
         run: |
+          # Trim accidental newlines/spaces copied into GitHub secrets before HTTP headers are built.
+          export KITE_API_KEY="$(printf '%s' "$KITE_API_KEY" | tr -d '\r\n' | xargs)"
+          export KITE_ACCESS_TOKEN="$(printf '%s' "$KITE_ACCESS_TOKEN" | tr -d '\r\n' | xargs)"
           if [ -s data/nifty_1m.csv ]; then
             echo "Historical CSV already exists; keeping the checked-in dataset."
           elif [ -n "$KITE_API_KEY" ] && [ -n "$KITE_ACCESS_TOKEN" ]; then
@@ -81,13 +84,13 @@ jobs:
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
             echo "::warning::Backtest skipped: data/nifty_1m.csv is not present in this checkout."
-            {
-              echo "## Walk-forward backtest"
-              echo ""
-              echo "**Skipped:** `data/nifty_1m.csv` is not present. Add the real historical NIFTY 1-minute OHLCV CSV at that path to enable win-rate reporting."
-              echo ""
-              echo "Required columns: `timestamp,open,high,low,close,volume`."
-            } >> "$GITHUB_STEP_SUMMARY"
+            cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          ## Walk-forward backtest
+
+          **Skipped:** `data/nifty_1m.csv` is not present. Add the real historical NIFTY 1-minute OHLCV CSV at that path to enable win-rate reporting.
+
+          Required columns: `timestamp,open,high,low,close,volume`.
+          SUMMARY
           fi
       - name: Run walk-forward backtest with estimated costs
         if: steps.data.outputs.available == 'true'
