@@ -533,9 +533,13 @@ def main() -> None:
         dest="fit_probability_model",
         help="write a broad feature probability model (--fit-profiles is a legacy alias)",
     )
+    parser.add_argument(
+        "--fit-trade-quality-model",
+        help="write a conservative trade-quality veto model from resolved historical trades",
+    )
     args = parser.parse_args()
-    if args.fit_probability_model and args.walk_forward:
-        parser.error("--fit-probability-model cannot be combined with --walk-forward")
+    if (args.fit_probability_model and args.walk_forward) or (args.fit_trade_quality_model and args.walk_forward):
+        parser.error("model fitting cannot be combined with --walk-forward")
     if args.score_sweep and not args.walk_forward:
         parser.error("--score-sweep requires --walk-forward")
 
@@ -560,6 +564,14 @@ def main() -> None:
             save_model(model, args.fit_probability_model)
             result["probability_model_path"] = str(args.fit_probability_model)
             result["probability_model_samples"] = model.get("samples", 0)
+        if args.fit_trade_quality_model:
+            quality_model = fit_trade_quality_model(result["trades"])
+            output_path = Path(args.fit_trade_quality_model)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(quality_model, indent=2), encoding="utf-8")
+            result["trade_quality_model_path"] = str(output_path)
+            result["trade_quality_model_samples"] = quality_model.get("samples", 0)
+            result["trade_quality_model_vetoes"] = len(quality_model.get("vetoes", []))
     print(json.dumps(result, indent=2))
 
 
