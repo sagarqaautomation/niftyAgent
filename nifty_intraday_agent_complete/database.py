@@ -235,6 +235,7 @@ def init_db():
         with open("schema.sql", "r", encoding="utf-8") as f:
             conn.executescript(f.read())
     ensure_market_status_columns()
+    ensure_premarket_snapshots_table()
     ensure_news_columns()
     ensure_signal_columns()
     ensure_equity_feature_snapshot_column()
@@ -243,6 +244,71 @@ def init_db():
     expire_overdue_equity_outcomes()
     expire_stale_equity_signals()
     normalize_candle_timestamps()
+
+def ensure_premarket_snapshots_table() -> None:
+    with connect() as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS premarket_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            observed_at TEXT NOT NULL,
+            saved_at TEXT NOT NULL,
+            directional_bias TEXT NOT NULL,
+            directional_score REAL NOT NULL,
+            volatility_regime TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL
+        )
+        """)
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_premarket_snapshots_observed
+        ON premarket_snapshots(observed_at DESC, id DESC)
+        """)
+
+
+def insert_premarket_snapshot(snapshot: dict[str, Any]) -> int:
+    observed_at = str(snapshot.get("observed_at") or utc_now())
+    with connect() as conn:
+        cursor = conn.execute("""
+        INSERT INTO premarket_snapshots
+        (observed_at,saved_at,directional_bias,directional_score,volatility_regime,snapshot_json)
+        VALUES (?,?,?,?,?,?)
+        """, (
+            observed_at, utc_now(), str(snapshot.get("directional_bias", "INSUFFICIENT_DATA")),
+            float(snapshot.get("directional_score", 0.0)),
+            str(snapshot.get("volatility_regime", "UNKNOWN")),
+            json.dumps(snapshot, allow_nan=False),
+        ))
+        return int(cursor.lastrowid)
+
+
+def latest_premarket_snapshot() -> dict[str, Any] | None:
+    with connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("""
+        SELECT id,observed_at,saved_at,directional_bias,directional_score,
+               volatility_regime,snapshot_json
+        FROM premarket_snapshots ORDER BY observed_at DESC,id DESC LIMIT 1
+        """).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    result["snapshot"] = json.loads(result.pop("snapshot_json"))
+    return result
+
+
+def list_premarket_snapshots(limit: int = 50) -> list[dict[str, Any]]:
+    with connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+        SELECT id,observed_at,saved_at,directional_bias,directional_score,
+               volatility_regime,snapshot_json
+        FROM premarket_snapshots ORDER BY observed_at DESC,id DESC LIMIT ?
+        """, (max(1, min(int(limit), 500)),)).fetchall()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["snapshot"] = json.loads(item.pop("snapshot_json"))
+        results.append(item)
+    return results
 
 def insert_candle(c: dict[str, Any]) -> None:
     insert_candles([c])
