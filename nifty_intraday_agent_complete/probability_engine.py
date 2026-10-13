@@ -8,7 +8,7 @@ import json, math
 from pathlib import Path
 from typing import Any
 
-FEATURE_NAMES = ("direction","regime","trend_strength","momentum","vwap_location","volume","candle","structure","time_bucket")
+FEATURE_NAMES = ("direction","regime","trend_strength","momentum","vwap_location","volume","candle","structure","time_bucket","pattern_hammer","pattern_morning_star","pattern_bullish_engulfing")
 
 def _bucket(x: dict[str, Any]) -> dict[str, str]:
     adx=float(x.get("adx") or 0); rsi=float(x.get("rsi") or 50)
@@ -24,6 +24,10 @@ def _bucket(x: dict[str, Any]) -> dict[str, str]:
       "candle":"weak" if candle<0.50 else "medium" if candle<0.65 else "strong",
       "structure":str(x.get("structure","NONE")),
       "time_bucket":"open" if hour==9 else "morning" if hour==10 else "midday" if hour in (11,12,13) else "afternoon",
+      # Pattern flags are binary and are only set from the latest completed candle.
+      "pattern_hammer":"present" if bool(x.get("pattern_hammer", False)) else "absent",
+      "pattern_morning_star":"present" if bool(x.get("pattern_morning_star", False)) else "absent",
+      "pattern_bullish_engulfing":"present" if bool(x.get("pattern_bullish_engulfing", False)) else "absent",
     }
 
 def feature_snapshot(x: dict[str, Any]) -> dict[str,str]:
