@@ -8,7 +8,7 @@ import json, math
 from pathlib import Path
 from typing import Any
 
-FEATURE_NAMES = ("direction","regime","trend_strength","momentum","vwap_location","volume","candle","structure","time_bucket","pattern_hammer","pattern_morning_star","pattern_bullish_engulfing")
+FEATURE_NAMES = ("direction","regime","direction_regime","trend_strength","momentum","vwap_location","volume","candle","structure","time_bucket","pattern_hammer","pattern_morning_star","pattern_bullish_engulfing")
 
 def _bucket(x: dict[str, Any]) -> dict[str, str]:
     adx=float(x.get("adx") or 0); rsi=float(x.get("rsi") or 50)
@@ -17,6 +17,8 @@ def _bucket(x: dict[str, Any]) -> dict[str, str]:
     return {
       "direction":str(x.get("direction","UNKNOWN")),
       "regime":str(x.get("regime","UNKNOWN")),
+      # Preserve interaction signal: direction and regime can be predictive only jointly.
+      "direction_regime":f"{x.get('direction','UNKNOWN')}:{x.get('regime','UNKNOWN')}",
       "trend_strength":"weak" if adx<20 else "medium" if adx<25 else "strong",
       "momentum":"bear" if rsi<45 else "neutral" if rsi<55 else "bull",
       "vwap_location":"below" if vw<-0.10 else "near" if vw<=0.10 else "above",
