@@ -50,6 +50,15 @@
     <article class="card"><div class="label">Safety and data integrity</div><div style="margin-top:14px"><p>✓ Read-only frontend</p><p>✓ No broker credentials in browser code</p><p>✓ No order-placement controls</p><p>✓ Missing values are not fabricated</p><p class="small">Automatic order placement must remain disabled in the Python backend (<code>AUTO_ORDER_PLACEMENT=false</code>).</p></div></article>
   </section>
 
+  <h2 class="section-title">Latest walk-forward backtest</h2>
+  <section class="grid" aria-label="Historical backtest results">
+    <article class="card"><div class="label">Baseline win rate</div><div class="value" id="baselineWinRate">—</div><div class="hint" id="baselineTrades">Report loading…</div></article>
+    <article class="card"><div class="label">Probability-filtered win rate</div><div class="value" id="filteredWinRate">—</div><div class="hint" id="filteredTrades">Historical results only</div></article>
+    <article class="card"><div class="label">Net profit factor</div><div class="value" id="netPF">Below 1</div><div class="hint">Below 1 in every fold for both strategies</div></article>
+    <article class="card"><div class="label">Estimated round-trip cost</div><div class="value" id="costPoints">2 points</div><div class="hint">Estimate, not measured brokerage/slippage</div></article>
+  </section>
+  <article class="card" style="margin-top:12px"><div class="label">Interpretation</div><p id="backtestNotes">Historical walk-forward report. Not a live trading signal.</p><p class="small"><a href="./backtest-results.json" target="_blank" rel="noopener noreferrer">View published backtest JSON</a> · <a href="https://github.com/sagarqaautomation/niftyAgent/actions/runs/38596238095" target="_blank" rel="noopener noreferrer">Open source GitHub Actions run</a></p></article>
+
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px"><button class="btn" id="refreshBtn" type="button">Refresh published data</button><span class="small" id="refreshMessage" aria-live="polite">Looking for docs/data/status.json</span></div>
   <footer class="footer"><span>NiftyAgent · Research/alert-only · Not investment advice</span><span><a href="https://github.com/sagarqaautomation/niftyAgent/tree/v2.1-accuracy-engine">View v2.1-accuracy-engine source</a> · <a href="https://github.com/sagarqaautomation/niftyAgent/actions">GitHub Actions</a></span></footer>
 </main>
@@ -88,7 +97,26 @@
       byId("refreshBtn").disabled = false;
     }
   }
+  async function loadBacktest() {
+    try {
+      const response = await fetch("./backtest-results.json?ts=" + Date.now(), { cache: "no-store" });
+      if (!response.ok) throw new Error("Backtest report unavailable");
+      const report = await response.json();
+      const base = report.baseline || {};
+      const filtered = report.probability_filtered || {};
+      byId("baselineWinRate").textContent = Number.isFinite(base.win_rate_pct) ? base.win_rate_pct.toFixed(2) + "%" : "—";
+      byId("baselineTrades").textContent = Number.isFinite(base.resolved_trades) ? base.resolved_trades + " resolved trades" : "No trade count";
+      byId("filteredWinRate").textContent = Number.isFinite(filtered.win_rate_pct) ? filtered.win_rate_pct.toFixed(2) + "%" : "—";
+      byId("filteredTrades").textContent = Number.isFinite(filtered.resolved_trades) ? filtered.resolved_trades + " resolved trades · " + report.validation_folds + " folds" : "No trade count";
+      byId("costPoints").textContent = Number.isFinite(report.estimated_round_trip_cost_points) ? report.estimated_round_trip_cost_points + " points" : "Not reported";
+      byId("netPF").textContent = "Below 1";
+      byId("backtestNotes").textContent = "Probability filtering raised aggregate win rate by " + (filtered.win_rate_pct - base.win_rate_pct).toFixed(2) + " percentage points while reducing trade count. Net profit factor stayed below 1 in every fold; this does not establish profitability. Premarket features are not yet included in this backtest.";
+    } catch (error) {
+      byId("backtestNotes").textContent = "Unable to load the published backtest report. Use the JSON link to inspect it directly.";
+    }
+  }
   byId("refreshBtn").addEventListener("click", refresh);
+  loadBacktest();
   refresh();
 })();
 </script>
