@@ -101,9 +101,23 @@ Put them in `.env`.
 
 The project deliberately does not hard-code credentials.
 
-### Authentication note
+### Browser-based Kite authentication
 
-Kite Connect uses a login/request-token flow. The exact daily authentication flow depends on your account/application setup. `broker/kite_adapter.py` contains the adapter boundary so authentication can be added without changing the signal engine.
+The API now provides a browser-based flow so you do not need to run a token-generation Python script or manually paste a new access token into `.env` each day:
+
+1. Set `KITE_API_KEY` and `KITE_API_SECRET` as private backend environment variables.
+2. In your Kite Connect developer console, set the app's registered redirect URL to the public HTTPS URL `https://YOUR-BACKEND-HOST/kite/callback` (replace the hostname with your deployed API URL). It must match the URL registered for your Kite app.
+3. Deploy the API on a persistent backend and open `https://YOUR-BACKEND-HOST/kite/login` in a browser.
+4. Complete Kite login and any required 2FA. The callback exchanges the one-time request token server-side and saves the access token to `data/kite_token.json`; the token is never returned by `/kite/auth/status`.
+5. Keep the `data/` directory on a private persistent volume. Do not commit the token file or expose it through static hosting.
+
+Useful endpoints:
+
+- `GET /kite/login` — redirects to official Kite login.
+- `GET /kite/callback` — receives the registered redirect and exchanges the one-time request token.
+- `GET /kite/auth/status` — reports whether a token is configured, without returning the token.
+
+Kite access tokens normally expire at 6:00 AM IST, so **the user must still complete Kite login/2FA again for a new session**. This flow automates request-token exchange and secure storage, not the broker's login or 2FA. A local-only API or GitHub Pages URL cannot serve as the public callback; the API needs a reachable HTTPS backend. After refreshing a token, restart/reconnect the market-data worker so it creates a new Kite WebSocket using the new session. Automatic order placement remains disabled.
 
 For live market data, the project expects a broker WebSocket adapter.
 
@@ -162,6 +176,9 @@ GET /performance
 GET /latest-signal
 GET /signals
 GET /news
+GET /kite/login
+GET /kite/callback
+GET /kite/auth/status
 ```
 
 Example:
