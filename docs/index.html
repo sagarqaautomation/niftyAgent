@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b1220">
+  <meta name="description" content="NiftyAgent read-only NIFTY research and signal monitoring dashboard.">
+  <title>NiftyAgent | Market Dashboard</title>
+  <style>
+    :root{color-scheme:dark;--bg:#080d18;--panel:#111a2b;--line:#26334a;--text:#eef4ff;--muted:#9aabc4;--blue:#79a9ff;--green:#4cdaa0;--red:#ff7d8d;--amber:#f5c66a}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 15% 0%,#142442 0,transparent 40%),var(--bg);color:var(--text);font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+    main{max-width:1120px;margin:auto;padding:28px 18px 50px}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    .brand{display:flex;align-items:center;gap:12px}.logo{width:46px;height:46px;border-radius:14px;background:#1c3152;display:grid;place-items:center;font-size:25px;border:1px solid #34517d}
+    h1{font-size:clamp(25px,4vw,36px);line-height:1.1;margin:0;letter-spacing:-.04em}.sub{color:var(--muted);margin:7px 0 0}
+    .pill{border:1px solid var(--line);background:#111a2b;border-radius:999px;padding:7px 12px;color:var(--amber);font-size:12px;font-weight:700;letter-spacing:.04em}
+    .notice{margin:24px 0;padding:15px 17px;border:1px solid #6e5528;background:#2b2416;border-radius:14px;color:#f8dfaa}.notice strong{display:block;margin-bottom:3px}
+    .section-title{font-size:17px;margin:28px 0 12px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .card{background:linear-gradient(145deg,#141f33,#0e1625);border:1px solid var(--line);border-radius:16px;padding:17px;min-width:0}
+    .label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.value{font-size:23px;font-weight:750;margin-top:9px;overflow-wrap:anywhere}.hint{font-size:12px;color:var(--muted);margin-top:7px}
+    .two{display:grid;grid-template-columns:1.2fr .8fr;gap:12px}.empty{min-height:160px;display:grid;place-items:center;text-align:center;color:var(--muted);padding:24px}
+    .signal{font-size:30px;font-weight:800;letter-spacing:.04em;color:var(--amber)}.btn{background:#203858;border:1px solid #3b5c88;color:var(--text);border-radius:10px;padding:9px 13px;cursor:pointer;font-weight:650}.btn:hover{background:#29476d}
+    .footer{margin-top:26px;border-top:1px solid var(--line);padding-top:16px;color:var(--muted);font-size:12px;display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap}
+    a{color:var(--blue)}.small{font-size:13px;color:var(--muted)}code{color:#c8d9ff}
+    @media(max-width:760px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.two{grid-template-columns:1fr}}@media(max-width:400px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div class="brand"><div class="logo" aria-hidden="true">↗</div><div><h1>NiftyAgent</h1><p class="sub">NIFTY research · signal quality · session monitor</p></div></div>
+    <span class="pill" id="siteState">STATIC DASHBOARD</span>
+  </header>
+
+  <section class="notice" role="status">
+    <strong>Read-only dashboard — live feed not connected</strong>
+    GitHub Pages serves static files only. This page does not run the Python agent, connect to Kite, or generate live CALL/PUT signals. Values stay unavailable until a trusted backend or report publisher supplies them.
+  </section>
+
+  <h2 class="section-title">Market overview</h2>
+  <section class="grid" aria-label="Market overview">
+    <article class="card"><div class="label">Market status</div><div class="value" id="marketStatus">Unavailable</div><div class="hint" id="marketHint">No live market-status feed</div></article>
+    <article class="card"><div class="label">Latest signal</div><div class="value signal" id="latestSignal">—</div><div class="hint" id="signalHint">Waiting for published signal data</div></article>
+    <article class="card"><div class="label">Walk-forward win rate</div><div class="value" id="winRate">—</div><div class="hint" id="tradeCount">No verified report loaded</div></article>
+    <article class="card"><div class="label">Data last updated</div><div class="value" id="updatedAt" style="font-size:17px">Not available</div><div class="hint" id="dataState">Static placeholder data</div></article>
+  </section>
+
+  <h2 class="section-title">Signal quality</h2>
+  <section class="two">
+    <article class="card"><div class="label">Performance report</div><div class="empty" id="reportPanel"><div><div style="font-size:28px;margin-bottom:8px">◷</div><strong>No verified backtest report published</strong><p class="small">The dashboard will only show win rate and trade counts when a report with those fields is published.</p></div></div></article>
+    <article class="card"><div class="label">Safety and data integrity</div><div style="margin-top:14px"><p>✓ Read-only frontend</p><p>✓ No broker credentials in browser code</p><p>✓ No order-placement controls</p><p>✓ Missing values are not fabricated</p><p class="small">Automatic order placement must remain disabled in the Python backend (<code>AUTO_ORDER_PLACEMENT=false</code>).</p></div></article>
+  </section>
+
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px"><button class="btn" id="refreshBtn" type="button">Refresh published data</button><span class="small" id="refreshMessage" aria-live="polite">Looking for docs/data/status.json</span></div>
+  <footer class="footer"><span>NiftyAgent · Research/alert-only · Not investment advice</span><span><a href="https://github.com/sagarqaautomation/niftyAgent/tree/v2.1-accuracy-engine">View v2.1-accuracy-engine source</a> · <a href="https://github.com/sagarqaautomation/niftyAgent/actions">GitHub Actions</a></span></footer>
+</main>
+<script>
+(() => {
+  const byId = id => document.getElementById(id);
+  const fmtDate = value => {
+    if (!value) return "Not available";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" }) + " IST";
+  };
+  async function refresh() {
+    byId("refreshBtn").disabled = true;
+    byId("refreshMessage").textContent = "Refreshing published data…";
+    try {
+      const response = await fetch("./data/status.json?ts=" + Date.now(), { cache: "no-store" });
+      if (!response.ok) throw new Error("No published status data (" + response.status + ")");
+      const data = await response.json();
+      byId("marketStatus").textContent = data.market_status || "Unavailable";
+      byId("marketHint").textContent = data.market_hint || "No live market-status feed";
+      byId("latestSignal").textContent = data.latest_signal || "—";
+      byId("signalHint").textContent = data.signal_time ? "Signal timestamp: " + fmtDate(data.signal_time) : "No published signal";
+      byId("winRate").textContent = Number.isFinite(data.walk_forward_win_rate_pct) ? data.walk_forward_win_rate_pct.toFixed(1) + "%" : "—";
+      byId("tradeCount").textContent = Number.isFinite(data.resolved_trades) ? data.resolved_trades + " resolved trades · " + (data.report_label || "report") : "No verified report loaded";
+      byId("updatedAt").textContent = fmtDate(data.updated_at);
+      byId("dataState").textContent = data.data_state || "Published snapshot";
+      if (data.report_url) {
+        const link = document.createElement("a"); link.href = data.report_url; link.rel = "noopener noreferrer"; link.target = "_blank"; link.textContent = "Open full backtest report";
+        const panel = byId("reportPanel"); panel.replaceChildren(link);
+      }
+      byId("siteState").textContent = data.data_state === "LIVE_BACKEND_CONNECTED" ? "BACKEND CONNECTED" : "STATIC DASHBOARD";
+      byId("refreshMessage").textContent = "Published data loaded. This page does not poll a live broker feed.";
+    } catch (error) {
+      byId("refreshMessage").textContent = "No published live/backtest data yet. " + error.message;
+    } finally {
+      byId("refreshBtn").disabled = false;
+    }
+  }
+  byId("refreshBtn").addEventListener("click", refresh);
+  refresh();
+})();
+</script>
+</body>
+</html>
