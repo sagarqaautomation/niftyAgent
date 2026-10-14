@@ -117,6 +117,20 @@ def build_report(stage: str) -> tuple[str, dict[str, Any]]:
     breadth = indicators.get("advance_decline", {}) or {}
     globals_data = context.get("data_sources", {}).get("global_indices_daily_change_pct", {})
     globals_data = globals_data if isinstance(globals_data, dict) else {}
+    # Only label breadth ratio as current when the collector says the source is
+    # current-session data. At 09:00, prior-session breadth may be shown, but is
+    # explicitly labelled as prior-session context.
+    breadth_ratio = None
+    breadth_freshness = str(breadth.get("availability", "unavailable"))
+    if breadth_freshness == "available" or (
+        stage == "premarket" and breadth_freshness == "latest_published_session"
+    ):
+        try:
+            advances = float(breadth.get("advances"))
+            declines = float(breadth.get("declines"))
+            breadth_ratio = advances / declines if declines > 0 else (4.0 if advances > 0 else None)
+        except (TypeError, ValueError):
+            breadth_ratio = None
 
     lines = [
         f"# NiftyAgent {stage} report",
@@ -135,7 +149,7 @@ def build_report(stage: str) -> tuple[str, dict[str, Any]]:
         f"| GIFT Nifty | {fmt(gift.get('price'))}; {fmt(gift.get('change_pct'), '%')}; {gift.get('direction', 'UNAVAILABLE')} | {gift.get('source', 'source unavailable')}; source time {gift.get('timestamp') or 'unavailable'} |",
         f"| India VIX | {fmt(vix.get('value'))}; change {fmt(vix.get('change_pct'), '%')} | {vix.get('source', 'unavailable')}; threshold 15; live quote not guaranteed |",
         f"| NSE advances / declines | {fmt(breadth.get('advances'))} / {fmt(breadth.get('declines'))} | {breadth.get('source', 'unavailable')}; source time {breadth.get('timestamp') or 'unavailable'}; status {breadth.get('availability', 'unavailable')} |",
-        f"| Advance/decline ratio | {fmt(breadth.get('advance_decline_ratio', context.get('advance_decline_ratio')))} | only valid when source counts are current and reliable |",
+        f"| Advance/decline ratio | {fmt(breadth_ratio)} | source status: {breadth_freshness}; prior-session ratio is context only |",
         "",
         "## Global markets",
         "",
