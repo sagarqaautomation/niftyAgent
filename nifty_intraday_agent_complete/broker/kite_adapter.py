@@ -20,6 +20,7 @@ from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from config import settings
+from kite_auth_store import load_access_token
 
 try:
     from kiteconnect import KiteTicker as _KiteTicker, KiteConnect as _KiteConnect  # type: ignore[reportMissingTypeStubs]
@@ -48,18 +49,19 @@ class KiteMarketData:
             raise RuntimeError("kiteconnect package is not installed")
         if not settings.kite_api_key:
             raise RuntimeError("KITE_API_KEY is missing in .env")
-        if not settings.kite_access_token:
+        access_token = load_access_token()
+        if not access_token:
             raise RuntimeError(
-                "KITE_ACCESS_TOKEN is missing. Complete the current Kite authentication flow first."
+                "Kite access token is missing. Open the backend /kite/login URL and complete Kite login."
             )
 
         kite = KiteConnect(api_key=settings.kite_api_key)
-        kite.set_access_token(settings.kite_access_token)
+        kite.set_access_token(access_token)
         self.kite = kite
 
         self.ticker = KiteTicker(
             settings.kite_api_key,
-            settings.kite_access_token
+            access_token
         )
 
         return self
