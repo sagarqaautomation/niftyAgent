@@ -256,6 +256,7 @@ def process_frames(
         "constituent_news_bias": constituent_news_bias,
         "constituent_news_metrics": dict(constituent_news_metrics or {}),
         "premarket_context": premarket,
+        "pattern_confirmation": signal.get("pattern_confirmation") or [],
         # Flat numeric candidate features simplify later CSV/model experiments.
         "premarket_directional_score": premarket.get("directional_score"),
         "premarket_india_vix": premarket.get("india_vix"),
