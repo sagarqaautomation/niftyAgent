@@ -6,7 +6,9 @@ __pycache__/
 *.db
 *.sqlite
 *.sqlite3
+*.csv
+!data/nifty_1m.csv
+*.json
 logs/*
-data/*.csv
 .idea/
 .vscode/

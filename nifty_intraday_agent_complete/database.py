@@ -62,6 +62,19 @@ def ensure_market_status_columns() -> None:
             if name not in columns:
                 conn.execute(f"ALTER TABLE market_status ADD COLUMN {name} {declaration}")
 
+def ensure_news_columns() -> None:
+    additions = {
+        "summary": "TEXT",
+        "event_categories_json": "TEXT NOT NULL DEFAULT '[]'",
+        "symbols_json": "TEXT NOT NULL DEFAULT '[]'",
+        "published_epoch": "REAL",
+    }
+    with connect() as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(news)")}
+        for name, declaration in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE news ADD COLUMN {name} {declaration}")
+
 def ensure_signal_columns() -> None:
     additions = {
         "signal_instrument": "TEXT",
@@ -72,6 +85,10 @@ def ensure_signal_columns() -> None:
         "spot_trigger_offset": "REAL",
         "spot_cross_price": "REAL",
         "spot_cross_time": "TEXT",
+        "market_regime": "TEXT",
+        "adx": "REAL",
+        "relative_volume": "REAL",
+        "feature_snapshot_json": "TEXT",
     }
     with connect() as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(signals)")}
@@ -218,6 +235,8 @@ def init_db():
         with open("schema.sql", "r", encoding="utf-8") as f:
             conn.executescript(f.read())
     ensure_market_status_columns()
+    ensure_premarket_snapshots_table()
+    ensure_news_columns()
     ensure_signal_columns()
     ensure_equity_feature_snapshot_column()
     ensure_equity_candle_patterns_column()
@@ -225,6 +244,71 @@ def init_db():
     expire_overdue_equity_outcomes()
     expire_stale_equity_signals()
     normalize_candle_timestamps()
+
+def ensure_premarket_snapshots_table() -> None:
+    with connect() as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS premarket_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            observed_at TEXT NOT NULL,
+            saved_at TEXT NOT NULL,
+            directional_bias TEXT NOT NULL,
+            directional_score REAL NOT NULL,
+            volatility_regime TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL
+        )
+        """)
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_premarket_snapshots_observed
+        ON premarket_snapshots(observed_at DESC, id DESC)
+        """)
+
+
+def insert_premarket_snapshot(snapshot: dict[str, Any]) -> int:
+    observed_at = str(snapshot.get("observed_at") or utc_now())
+    with connect() as conn:
+        cursor = conn.execute("""
+        INSERT INTO premarket_snapshots
+        (observed_at,saved_at,directional_bias,directional_score,volatility_regime,snapshot_json)
+        VALUES (?,?,?,?,?,?)
+        """, (
+            observed_at, utc_now(), str(snapshot.get("directional_bias", "INSUFFICIENT_DATA")),
+            float(snapshot.get("directional_score", 0.0)),
+            str(snapshot.get("volatility_regime", "UNKNOWN")),
+            json.dumps(snapshot, allow_nan=False),
+        ))
+        return int(cursor.lastrowid)
+
+
+def latest_premarket_snapshot() -> dict[str, Any] | None:
+    with connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("""
+        SELECT id,observed_at,saved_at,directional_bias,directional_score,
+               volatility_regime,snapshot_json
+        FROM premarket_snapshots ORDER BY observed_at DESC,id DESC LIMIT 1
+        """).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    result["snapshot"] = json.loads(result.pop("snapshot_json"))
+    return result
+
+
+def list_premarket_snapshots(limit: int = 50) -> list[dict[str, Any]]:
+    with connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+        SELECT id,observed_at,saved_at,directional_bias,directional_score,
+               volatility_regime,snapshot_json
+        FROM premarket_snapshots ORDER BY observed_at DESC,id DESC LIMIT ?
+        """, (max(1, min(int(limit), 500)),)).fetchall()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["snapshot"] = json.loads(item.pop("snapshot_json"))
+        results.append(item)
+    return results
 
 def insert_candle(c: dict[str, Any]) -> None:
     insert_candles([c])
@@ -408,12 +492,25 @@ def insert_news(item: dict[str, Any]) -> None:
     with connect() as conn:
         conn.execute("""
         INSERT OR IGNORE INTO news
-        (source,title,url,published_at,fetched_at,sentiment,market_bias)
-        VALUES (?,?,?,?,?,?,?)
+        (source,title,url,published_at,fetched_at,sentiment,market_bias,summary,
+         event_categories_json,symbols_json,published_epoch)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(source,title) DO UPDATE SET
+        url=excluded.url,
+        published_at=COALESCE(excluded.published_at,news.published_at),
+        sentiment=excluded.sentiment,
+        market_bias=excluded.market_bias,
+        summary=excluded.summary,
+        event_categories_json=excluded.event_categories_json,
+        symbols_json=excluded.symbols_json,
+        published_epoch=COALESCE(excluded.published_epoch,news.published_epoch)
         """, (
             item["source"], item["title"], item.get("url"),
             item.get("published_at"), utc_now(), item.get("sentiment"),
-            item.get("market_bias")
+            item.get("market_bias"), item.get("summary"),
+            json.dumps(item.get("categories", []), ensure_ascii=True),
+            json.dumps(item.get("symbols", []), ensure_ascii=True),
+            item.get("published_epoch"),
         ))
 
 def insert_signal(s: dict[str, Any]) -> int:
@@ -423,8 +520,9 @@ def insert_signal(s: dict[str, Any]) -> int:
         (created_at,signal,technical_score,context_score,total_score,entry_price,
          target_price,stop_loss,option_symbol,option_entry,reason,news_bias,option_bias,
          signal_instrument,signal_candle_time,spot_reference_price,spot_reference_time,
-         spot_trigger_price,spot_trigger_offset,spot_cross_price,spot_cross_time)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         spot_trigger_price,spot_trigger_offset,spot_cross_price,spot_cross_time,
+         market_regime,adx,relative_volume,feature_snapshot_json)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             utc_now(), s["signal"], s["technical_score"], s["context_score"],
             s["total_score"], s.get("entry_price"), s.get("target_price"),
@@ -433,7 +531,10 @@ def insert_signal(s: dict[str, Any]) -> int:
             s.get("signal_instrument"), s.get("signal_candle_time"),
             s.get("spot_reference_price"), s.get("spot_reference_time"),
             s.get("spot_trigger_price"), s.get("spot_trigger_offset"),
-            s.get("spot_cross_price"), s.get("spot_cross_time")
+            s.get("spot_cross_price"), s.get("spot_cross_time"),
+            s.get("market_regime"), s.get("adx"), s.get("relative_volume"),
+            json.dumps(s.get("feature_snapshot"), allow_nan=False)
+            if s.get("feature_snapshot") is not None else None,
         ))
         row_id = cur.lastrowid
         return int(row_id) if row_id is not None else 0
@@ -508,11 +609,36 @@ def performance() -> dict[str, int | float | None]:
         ambiguous = conn.execute("SELECT COUNT(*) FROM signals WHERE status='AMBIGUOUS'").fetchone()[0]
         resolved = wins + losses
         accuracy = round(wins / resolved * 100, 2) if resolved else None
+
+        outcome_rows = conn.execute("""
+        SELECT status,entry_price,target_price,stop_loss
+        FROM signals WHERE status IN ('SUCCESS','FAILED')
+        """).fetchall()
+        r_values: list[float] = []
+        gross_profit = 0.0
+        gross_loss = 0.0
+        for status, entry, target, stop in outcome_rows:
+            if not entry or not target or not stop:
+                continue
+            risk = abs(float(entry) - float(stop))
+            if risk <= 0:
+                continue
+            reward = abs(float(target) - float(entry))
+            r_value = reward / risk if status == "SUCCESS" else -1.0
+            r_values.append(r_value)
+            if r_value > 0:
+                gross_profit += r_value
+            else:
+                gross_loss += abs(r_value)
+
+        avg_r = round(sum(r_values) / len(r_values), 4) if r_values else None
+        profit_factor = round(gross_profit / gross_loss, 4) if gross_loss else None
         return {
             "total": total, "calls": calls, "puts": puts,
             "wins": wins, "losses": losses, "expired": expired,
             "ambiguous": ambiguous, "resolved": resolved,
-            "accuracy_percent": accuracy
+            "accuracy_percent": accuracy, "avg_r": avg_r,
+            "profit_factor": profit_factor,
         }
 
 def latest_signal() -> dict[str, Any] | None:
@@ -682,13 +808,26 @@ def equity_signal_performance() -> dict[str, int | float | None]:
         "accuracy_percent": accuracy,
     }
 
-def list_news(limit: int = 50) -> list[dict[str, Any]]:
+def list_news(limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    if limit < 1 or offset < 0:
+        raise ValueError("limit must be positive and offset must be non-negative")
     with connect() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("""
-        SELECT * FROM news ORDER BY id DESC LIMIT ?
-        """, (limit,)).fetchall()
-        return [dict(x) for x in rows]
+        SELECT * FROM news
+        ORDER BY COALESCE(
+            published_epoch,
+            CAST(strftime('%s', fetched_at) AS REAL)
+        ) DESC, id DESC
+        LIMIT ? OFFSET ?
+        """, (limit, offset)).fetchall()
+        items = [dict(row) for row in rows]
+    for item in items:
+        item["event_categories"] = json.loads(
+            item.pop("event_categories_json", "[]") or "[]"
+        )
+        item["symbols"] = json.loads(item.pop("symbols_json", "[]") or "[]")
+    return items
 
 def list_candles(limit: int = 50) -> list[dict[str, Any]]:
     with connect() as conn:

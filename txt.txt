@@ -1,1 +1,4 @@
 https://www.twilio.com/docs/whatsapp/sandbox
+
+
+python backtester.py data/nifty_1m.csv > backtest_results.json
