@@ -634,7 +634,7 @@ The live worker persists point-in-time feature snapshots with NIFTY CALL/PUT ale
 - A new candidate is retrained after **20 additional resolved outcomes**.
 - Outputs are written locally to `data/research_candidate_model.json` and `data/live_learning_report.json`.
 - The report compares candidate probability calibration with a training-prior baseline using Brier score, and reports the later holdout results.
-- `LIVE_LEARNING_ENABLED=false` disables automatic candidate training. Run `python live_learning.py --once` is not supported; run `python live_learning.py` to perform one check/training attempt.
+- `LIVE_LEARNING_ENABLED=false` disables automatic candidate training. Run `python live_learning.py` to perform one check/training attempt.
 - The app must be running with live market data and using the same persistent SQLite database for resolved live outcomes to accumulate. GitHub Actions report jobs do not share this local database.
 
 **Safety:** the candidate is not automatically promoted and is not connected to live signal decisions. It is not the same schema as the optional `TRADE_QUALITY_MODEL_PATH` veto model. Do not point that setting at the research candidate. Keep `AUTO_ORDER_PLACEMENT=false`; no orders are placed by this learning loop.
