@@ -25,6 +25,7 @@ class LiveLearningTests(unittest.TestCase):
                 "opening_range_low": 21850,
             },
             "five_minute": {},
+            "pattern_confirmation": ["Hammer", "Bullish Engulfing"],
         }
 
     def _database(self, path: Path, count: int = 120) -> None:
@@ -63,6 +64,8 @@ class LiveLearningTests(unittest.TestCase):
         self.assertEqual(record["regime"], "TREND")
         self.assertEqual(record["structure"], "BREAKOUT_UP")
         self.assertAlmostEqual(record["candle_strength"], 0.72)
+        self.assertTrue(record["pattern_hammer"])
+        self.assertTrue(record["pattern_bullish_engulfing"])
 
     def test_unresolved_or_wait_signals_are_not_training_labels(self) -> None:
         self.assertIsNone(build_training_record(1, "now", "WAIT", "SUCCESS", self._snapshot()))
