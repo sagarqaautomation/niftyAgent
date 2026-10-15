@@ -74,6 +74,11 @@ def build_training_record(
     elif close_price is not None and opening_low is not None and close_price < opening_low:
         structure = "BREAKDOWN"
 
+    raw_patterns = snapshot.get("pattern_confirmation") or []
+    if isinstance(raw_patterns, str):
+        raw_patterns = [raw_patterns]
+    pattern_text = " ".join(str(item).lower() for item in raw_patterns)
+
     return {
         "id": int(row_id),
         "timestamp": str(candle_time),
@@ -86,9 +91,9 @@ def build_training_record(
         "candle_strength": _number(minute.get("body_pct")) or 0.0,
         "hour": hour,
         "structure": structure,
-        "pattern_hammer": False,
-        "pattern_morning_star": False,
-        "pattern_bullish_engulfing": False,
+        "pattern_hammer": "hammer" in pattern_text,
+        "pattern_morning_star": "morning star" in pattern_text,
+        "pattern_bullish_engulfing": "bullish engulfing" in pattern_text,
         "status": status,
     }
 
