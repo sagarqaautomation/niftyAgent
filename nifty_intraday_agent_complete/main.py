@@ -365,21 +365,22 @@ def main() -> None:
             daemon=True,
         ).start()
 
-    while not is_market_open():
-        closed_reason = (
-            "NSE market is closed. Live market data will start at 09:00 IST "
-            "on the next weekday session."
-        )
-        update_market_status(
-            "CLOSED",
-            last_error="",
-            analysis_state="CLOSED",
-            analysis_reason=closed_reason,
-            analysis_updated_at=utc_now(),
-        )
-        print(closed_reason, flush=True)
-        time.sleep(30)
-
+    if settings.live_market_data:
+        while not is_market_open():
+            closed_reason = (
+                "NSE market is closed. Live market data will start at 09:00 IST "
+                "on the next weekday session."
+            )
+            update_market_status(
+                "CLOSED",
+                last_error="",
+                analysis_state="CLOSED",
+                analysis_reason=closed_reason,
+                analysis_updated_at=utc_now(),
+            )
+            print(closed_reason, flush=True)
+            time.sleep(30)
+    
     update_market_status(
         "STARTING", last_error="", one_minute_bars=0, five_minute_bars=0,
         analysis_state="WARMING_UP", analysis_score=0,
