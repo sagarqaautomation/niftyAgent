@@ -856,6 +856,19 @@ def main() -> None:
             latest_future_price = float(price)
             latest_future_time = tick_time
 
+            # Track every received futures tick, not only ticks that produce a
+            # new candle. Otherwise the dashboard can falsely show a stale feed
+            # while the WebSocket is still delivering ticks.
+            tick_now = time.monotonic()
+            if tick_now - last_status_write >= 1:
+                update_market_status(
+                    "LIVE",
+                    last_tick_at=utc_now(),
+                    last_exchange_tick_at=tick_time.isoformat(),
+                    last_error="",
+                )
+                last_status_write = tick_now
+
             cumulative_volume = float(tick.get("volume_traded") or 0)
             tick_date = tick_time.date()
             if last_volume_date != tick_date or last_cumulative_volume is None:
