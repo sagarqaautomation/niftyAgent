@@ -580,73 +580,75 @@ def main() -> None:
     latest_equity_returns_pct: dict[str, float] = {}
     last_equity_status_write: dict[str, float] = {}
     last_equity_learning_check = 0.0
-    # Persist scanner status for every configured symbol, including symbols
-    # that have not produced a qualifying BUY signal.
-    for symbol, token in equity_tokens_by_symbol.items():
-        update_equity_scan_status(
-            symbol,
-            instrument_token=token,
-            rejection_reason="Loading historical candles for warm-up",
-        )
-
-    # Warm each equity candle engine with recent Kite minute history before
-    # evaluating live setups. This avoids waiting for the scanner to build all
-    # indicator history from fresh ticks after startup.
-    if equity_engines:
-        equity_history_end = pd.Timestamp.now(tz=settings.market_timezone).to_pydatetime()
-        equity_history_start = equity_history_end - timedelta(days=5)
-        for equity_index, (symbol, token) in enumerate(equity_tokens_by_symbol.items()):
-            # Stay under broker historical-data request limits while warming a
-            # large watchlist (typically up to 200 symbols).
-            if equity_index:
-                time.sleep(0.35)
-            try:
-                equity_history = broker.historical_data(
-                    token, equity_history_start, equity_history_end, "minute"
-                )
-                if not equity_history:
+    def warm_equity_history() -> None:
+        # Persist scanner status for every configured symbol, including symbols
+        # that have not produced a qualifying BUY signal.
+        for symbol, token in equity_tokens_by_symbol.items():
+            update_equity_scan_status(
+                symbol,
+                instrument_token=token,
+                rejection_reason="Loading historical candles for warm-up",
+            )
+    
+        # Warm each equity candle engine with recent Kite minute history before
+        # evaluating live setups. This avoids waiting for the scanner to build all
+        # indicator history from fresh ticks after startup.
+        if equity_engines:
+            equity_history_end = pd.Timestamp.now(tz=settings.market_timezone).to_pydatetime()
+            equity_history_start = equity_history_end - timedelta(days=5)
+            for equity_index, (symbol, token) in enumerate(equity_tokens_by_symbol.items()):
+                # Stay under broker historical-data request limits while warming a
+                # large watchlist (typically up to 200 symbols).
+                if equity_index:
+                    time.sleep(0.35)
+                try:
+                    equity_history = broker.historical_data(
+                        token, equity_history_start, equity_history_end, "minute"
+                    )
+                    if not equity_history:
+                        update_equity_scan_status(
+                            symbol, instrument_token=token,
+                            rejection_reason="Kite returned no historical candles",
+                        )
+                        print(f"Equity warm-up: {symbol} returned no historical candles", flush=True)
+                        continue
+                    equity_frames = equity_engines[symbol].load_history(equity_history)
+                    historical_equity_rows: list[CandleRecord] = []
+                    for timeframe, frame in equity_frames.items():
+                        historical_equity_rows.extend(
+                            equity_candle_records(symbol, timeframe, frame)
+                        )
+                    insert_equity_candles(historical_equity_rows)
+                    current_minute = pd.Timestamp.now(tz=settings.market_timezone).floor("min")
+                    closed_minutes = equity_frames["1min"].loc[
+                        equity_frames["1min"].index < current_minute
+                    ]
+                    if not closed_minutes.empty:
+                        last_equity_processed[symbol] = cast(pd.Timestamp, closed_minutes.index[-1])
                     update_equity_scan_status(
-                        symbol, instrument_token=token,
-                        rejection_reason="Kite returned no historical candles",
+                        symbol,
+                        instrument_token=token,
+                        one_minute_bars=int(len(equity_frames["1min"])),
+                        five_minute_bars=int(len(equity_frames["5min"])),
+                        rejection_reason="Historical warm-up complete; waiting for live tick",
                     )
-                    print(f"Equity warm-up: {symbol} returned no historical candles", flush=True)
-                    continue
-                equity_frames = equity_engines[symbol].load_history(equity_history)
-                historical_equity_rows: list[CandleRecord] = []
-                for timeframe, frame in equity_frames.items():
-                    historical_equity_rows.extend(
-                        equity_candle_records(symbol, timeframe, frame)
+                    print(
+                        f"Equity warm-up: {symbol} loaded "
+                        f"{len(equity_frames['1min'])} 1m / {len(equity_frames['5min'])} 5m bars",
+                        flush=True,
                     )
-                insert_equity_candles(historical_equity_rows)
-                current_minute = pd.Timestamp.now(tz=settings.market_timezone).floor("min")
-                closed_minutes = equity_frames["1min"].loc[
-                    equity_frames["1min"].index < current_minute
-                ]
-                if not closed_minutes.empty:
-                    last_equity_processed[symbol] = cast(pd.Timestamp, closed_minutes.index[-1])
-                update_equity_scan_status(
-                    symbol,
-                    instrument_token=token,
-                    one_minute_bars=int(len(equity_frames["1min"])),
-                    five_minute_bars=int(len(equity_frames["5min"])),
-                    rejection_reason="Historical warm-up complete; waiting for live tick",
-                )
-                print(
-                    f"Equity warm-up: {symbol} loaded "
-                    f"{len(equity_frames['1min'])} 1m / {len(equity_frames['5min'])} 5m bars",
-                    flush=True,
-                )
-            except Exception as exc:
-                update_equity_scan_status(
-                    symbol,
-                    instrument_token=token,
-                    rejection_reason=f"Historical warm-up failed: {type(exc).__name__}: {exc}",
-                )
-                print(
-                    f"Equity warm-up failed for {symbol}: {type(exc).__name__}: {exc}",
-                    flush=True,
-                )
-
+                except Exception as exc:
+                    update_equity_scan_status(
+                        symbol,
+                        instrument_token=token,
+                        rejection_reason=f"Historical warm-up failed: {type(exc).__name__}: {exc}",
+                    )
+                    print(
+                        f"Equity warm-up failed for {symbol}: {type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+    
+    
     if constituent_weights:
         print(f"Loaded NIFTY constituent weights for {len(constituent_weights)} symbols")
     else:
@@ -1280,6 +1282,13 @@ def main() -> None:
     broker.on_status(on_status)
     broker.on_tick(on_ticks)
     broker.start()
+    # Do not let a large equity watchlist delay NIFTY futures warm-up or
+    # WebSocket startup. Equity history is loaded in the background.
+    threading.Thread(
+        target=warm_equity_history,
+        name="equity-history-warmup",
+        daemon=True,
+    ).start()
 
     stop_spot_refresh = threading.Event()
 
