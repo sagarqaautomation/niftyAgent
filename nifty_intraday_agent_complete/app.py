@@ -103,7 +103,10 @@ def render_live_status() -> None:
         st.warning(f"Market feed is stale; last tick was {tick_age:.0f} seconds ago.")
     elif feed_state in {"STARTING", "CONNECTED"}:
         st.info(f"Market feed {feed_state.lower()}.")
-    if feed and feed.get("last_error") and feed_state not in {"ERROR", "DISCONNECTED"}:
+    # Only display the stored connection error while the feed is unhealthy.
+    # A reconnect can briefly leave a previous error string in older/local DB
+    # state; do not show a stale 1006 banner once the feed is CONNECTED or LIVE.
+    if feed and feed.get("last_error") and feed_state in {"ERROR", "DISCONNECTED", "RECONNECTING"}:
         st.warning(f"Market data notice: {feed['last_error']}")
     if market_open and candle_age is not None and candle_age > 120:
         st.warning(f"Latest stored NIFTY spot candle is stale by {candle_age / 60:.1f} minutes.")
