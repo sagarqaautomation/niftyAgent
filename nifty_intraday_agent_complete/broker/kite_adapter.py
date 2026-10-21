@@ -96,6 +96,10 @@ class KiteMarketData:
                 ws.set_mode(ws.MODE_FULL, self.instrument_tokens)
                 if settings.nifty_instrument_token:
                     ws.set_mode(ws.MODE_LTP, [int(settings.nifty_instrument_token)])
+            print(
+                f"Kite WebSocket connected; subscribed to {len(self.instrument_tokens)} instruments.",
+                flush=True,
+            )
             self._report_status("CONNECTED")
 
         def on_close(
@@ -115,13 +119,29 @@ class KiteMarketData:
             code: int | str | None,
             reason: str | None,
         ) -> None:
-            print("Kite WebSocket error:", code, reason)
-            self._report_status("ERROR", f"{code}: {reason}")
+            detail = f"{code}: {reason}"
+            print("Kite WebSocket error:", detail, flush=True)
+            self._report_status("ERROR", detail)
+
+        def on_reconnect(_ws: Any, attempts_count: int) -> None:
+            detail = f"KiteTicker reconnect attempt {attempts_count}/50."
+            print(detail, flush=True)
+            self._report_status("RECONNECTING", detail)
+
+        def on_noreconnect(_ws: Any) -> None:
+            detail = (
+                "KiteTicker exhausted its automatic reconnect attempts. "
+                "Check the worker log, network, and Kite session; restart the worker after resolving the cause."
+            )
+            print(detail, flush=True)
+            self._report_status("ERROR", detail)
 
         ticker.on_ticks = on_ticks
         ticker.on_connect = on_connect
         ticker.on_close = on_close
         ticker.on_error = on_error
+        ticker.on_reconnect = on_reconnect
+        ticker.on_noreconnect = on_noreconnect
 
     def on_status(self, callback: StatusCallback) -> None:
         self.status_callback = callback
