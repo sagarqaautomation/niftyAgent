@@ -5,6 +5,7 @@ Missing readings remain unavailable rather than being inferred.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 import time
 from datetime import datetime
 from html import unescape
@@ -256,7 +257,7 @@ def _global_sentiment() -> tuple[float | None, dict[str, float]]:
 def collect_live_premarket_context(
     broker: Any,
     *,
-    news_items: list[Mapping[str, Any]] | None = None,
+    news_items: Sequence[Mapping[str, Any]] | None = None,
     weights: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Collect best-effort live inputs; caller persists the immutable snapshot."""

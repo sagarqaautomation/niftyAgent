@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +9,26 @@ import database
 
 
 class NewsDatabaseTests(unittest.TestCase):
+    def test_init_db_enables_wal_and_busy_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "market.db"
+            test_settings = replace(database.settings, db_path=str(database_path))
+            with patch.object(database, "settings", test_settings):
+                database.init_db()
+                connection = database.connect()
+                try:
+                    journal_mode = connection.execute(
+                        "PRAGMA journal_mode"
+                    ).fetchone()[0]
+                    busy_timeout = connection.execute(
+                        "PRAGMA busy_timeout"
+                    ).fetchone()[0]
+                finally:
+                    connection.close()
+
+            self.assertEqual(journal_mode.lower(), "wal")
+            self.assertEqual(busy_timeout, 30_000)
+
     def test_old_news_table_migrates_and_stores_tags(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "news.db"

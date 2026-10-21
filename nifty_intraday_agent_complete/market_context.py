@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import math
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 
 def load_constituent_weights(path: str | Path = "data/nifty50_weights.csv") -> dict[str, float]:
@@ -103,7 +103,7 @@ def summarize_constituent_returns(
 
 
 def summarize_constituent_news(
-    items: list[Mapping[str, Any]],
+    items: Sequence[Mapping[str, Any]],
     weights: Mapping[str, float] | None,
     max_age_minutes: int = 60,
     now_epoch: float | None = None,

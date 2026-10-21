@@ -12,6 +12,7 @@ from database import (
     get_market_status, list_equity_signals_by_status, equity_signal_performance,
     list_recent_equity_patterns,
 )
+from indicators import detect_latest_candlestick_patterns
 
 init_db()
 
@@ -194,7 +195,83 @@ def render_signals() -> None:
 
 
 @st.fragment(run_every=5)
+def render_patterns() -> None:
+    market_timezone = ZoneInfo(settings.market_timezone)
+    now = pd.Timestamp.now(tz=market_timezone)
+    nifty_patterns: list[dict[str, str]] = []
+    spot_df = pd.DataFrame(list_spot_candles(200))
+    if not spot_df.empty:
+        for timeframe, duration_minutes in (("1min", 1), ("5min", 5)):
+            frame = spot_df.loc[spot_df["timeframe"] == timeframe].copy()
+            if frame.empty:
+                continue
+            candle_times = pd.DatetimeIndex(
+                pd.to_datetime(frame["timestamp"], errors="coerce")
+            )
+            candle_times = (
+                candle_times.tz_localize(market_timezone)
+                if candle_times.tz is None
+                else candle_times.tz_convert(market_timezone)
+            )
+            frame.index = candle_times
+            frame = frame.loc[
+                frame.index + pd.Timedelta(minutes=duration_minutes) <= now
+            ].sort_index().tail(100)
+            patterns = detect_latest_candlestick_patterns(frame)
+            if frame.empty or not patterns:
+                continue
+            candle_time = frame.index[-1].isoformat()
+            nifty_patterns.extend({
+                "Timeframe": timeframe,
+                "Closed candle": candle_time,
+                "Pattern": pattern["name"],
+                "Direction": pattern["direction"],
+            } for pattern in patterns)
+
+    st.subheader("NIFTY")
+    st.caption("Patterns are confirmed on the latest fully closed candle.")
+    if nifty_patterns:
+        streamlit_ui.dataframe(
+            pd.DataFrame(nifty_patterns), width="stretch", hide_index=True
+        )
+    else:
+        st.info("No pattern detected on the latest closed NIFTY candles.")
+
+    st.subheader("Equities")
+    equity_patterns: list[dict[str, str]] = []
+    for item in list_recent_equity_patterns(300):
+        try:
+            candle_time = pd.Timestamp(item["timestamp"])
+            candle_time = (
+                candle_time.tz_localize(market_timezone)
+                if candle_time.tzinfo is None
+                else candle_time.tz_convert(market_timezone)
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        age = now - candle_time
+        if age < pd.Timedelta(0) or age > pd.Timedelta(minutes=6):
+            continue
+        for pattern in item.get("patterns", []):
+            equity_patterns.append({
+                "Symbol": str(item.get("symbol", "")),
+                "Timeframe": str(item.get("timeframe", "")),
+                "Closed candle": candle_time.isoformat(),
+                "Pattern": str(pattern.get("name", "")),
+                "Direction": str(pattern.get("direction", "")),
+            })
+    if equity_patterns:
+        streamlit_ui.dataframe(
+            pd.DataFrame(equity_patterns), width="stretch", hide_index=True
+        )
+    else:
+        st.info("No equity patterns detected in the last six minutes.")
+    st.caption("Pattern detections are informational and do not independently trigger trades.")
+
+
+@st.fragment(run_every=5)
 def render_equities() -> None:
+    market_day = datetime.now(ZoneInfo(settings.market_timezone)).date()
     st.subheader("Recent Equity BUY Signals")
     st.caption(
         "Holding time extrapolates recent one-minute price movement; it is not a forecast or guarantee."
@@ -221,9 +298,11 @@ def render_equities() -> None:
             "result_price", "total_score",
         ]
         with stop_col:
-            st.subheader("Stop Loss Hit")
+            st.subheader("Stop Loss Hit Today")
             stop_df = pd.DataFrame(
-                list_equity_signals_by_status("STOP_HIT", 50)
+                list_equity_signals_by_status(
+                    "STOP_HIT", 50, market_day=market_day
+                )
             )
             if not stop_df.empty:
                 stop_df = stop_df[[column for column in outcome_cols if column in stop_df.columns]]
@@ -237,9 +316,11 @@ def render_equities() -> None:
                 st.info("No stop losses have been hit.")
 
         with target_col:
-            st.subheader("Target Hit")
+            st.subheader("Target Hit Today")
             target_df = pd.DataFrame(
-                list_equity_signals_by_status("TARGET_HIT", 50)
+                list_equity_signals_by_status(
+                    "TARGET_HIT", 50, market_day=market_day
+                )
             )
             if not target_df.empty:
                 target_df = target_df[[column for column in outcome_cols if column in target_df.columns]]
@@ -252,9 +333,11 @@ def render_equities() -> None:
             else:
                 st.info("No targets have been hit.")
 
-        st.subheader("Expired Signals")
+        st.subheader("Expired Signals Today")
         expired_df = pd.DataFrame(
-            list_equity_signals_by_status("EXPIRED", 50)
+            list_equity_signals_by_status(
+                "EXPIRED", 50, market_day=market_day
+            )
         )
         if not expired_df.empty:
             expired_cols = [
@@ -303,6 +386,9 @@ def render_equities() -> None:
         ])
         st.subheader("Equity Outcome Summary")
         streamlit_ui.dataframe(summary_df, width="stretch", hide_index=True)
+        st.caption(
+            "Outcome lists show this market day only; the summary retains all historical results."
+        )
         st.caption(
             "Accuracy = target-hit signals / (target-hit + stop-loss signals); "
             "ambiguous, expired, and open signals are excluded."
@@ -382,8 +468,8 @@ def render_dashboard() -> None:
         st.button("Refresh now")
 
     render_live_status()
-    overview_tab, signals_tab, equities_tab, news_tab = streamlit_ui.tabs(
-        ["Overview", "Signals", "Equities", "News"]
+    overview_tab, signals_tab, equities_tab, patterns_tab, news_tab = streamlit_ui.tabs(
+        ["Overview", "Signals", "Equities", "Patterns", "News"]
     )
     with overview_tab:
         render_overview()
@@ -391,6 +477,8 @@ def render_dashboard() -> None:
         render_signals()
     with equities_tab:
         render_equities()
+    with patterns_tab:
+        render_patterns()
     with news_tab:
         render_news()
 

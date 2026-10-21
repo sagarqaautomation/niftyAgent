@@ -1,4 +1,6 @@
-from typing import Any, cast
+from datetime import datetime, timedelta, timezone
+from typing import Any, Mapping, cast
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -18,6 +20,26 @@ def _empty(reason: str, state: str = "WARMING_UP") -> dict[str, Any]:
         "reason": reason,
         "analysis_state": state,
     }
+
+
+def _fresh_premarket_context(
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not context:
+        return {}
+    try:
+        observed_at = datetime.fromisoformat(str(context.get("observed_at")))
+    except (TypeError, ValueError):
+        return {}
+
+    market_timezone = ZoneInfo(settings.market_timezone)
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=market_timezone)
+    age = datetime.now(timezone.utc) - observed_at.astimezone(timezone.utc)
+    max_age = timedelta(minutes=settings.premarket_context_max_age_minutes)
+    if age < timedelta(0) or age > max_age:
+        return {}
+    return dict(context)
 
 
 def _value(row: pd.Series, name: str, default: float = float("nan")) -> float:
@@ -150,6 +172,7 @@ def build_signal(
     probability_threshold: float | None = None,
     trade_quality_model: dict[str, Any] | None = None,
     candlestick_patterns: list[dict[str, str]] | None = None,
+    premarket_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     required_history = max(40, quality.minimum_history_bars)
     if len(df1) < required_history or len(df5) < 40:
@@ -327,6 +350,10 @@ def build_signal(
         direction = "WAIT"
         reasons.extend(precision_failures)
 
+    fresh_premarket = _fresh_premarket_context(premarket_context)
+    premarket_bias = str(fresh_premarket.get("directional_bias", ""))
+    premarket_volatility = str(fresh_premarket.get("volatility_regime", ""))
+
     context_score = 0
     if news_bias == "BULLISH":
         context_score += 1
@@ -344,7 +371,13 @@ def build_signal(
         context_score += 1
     elif constituent_news_bias == "BEARISH":
         context_score -= 1
-    context_score = max(-4, min(4, context_score))
+    if premarket_bias == "BULLISH_BIAS":
+        context_score += 2
+        reasons.append("pre-market context is bullish (+2)")
+    elif premarket_bias == "BEARISH_BIAS":
+        context_score -= 2
+        reasons.append("pre-market context is bearish (-2)")
+    context_score = max(-6, min(6, context_score))
 
     if direction == "CALL" and context_score <= -2:
         direction = "WAIT"
@@ -353,11 +386,21 @@ def build_signal(
         direction = "WAIT"
         reasons.append("strongly conflicting external context")
 
-    if regime == "HIGH_VOLATILITY" and technical_score < quality.high_volatility_min_score:
+    premarket_high_volatility = premarket_volatility in {"HIGH", "ELEVATED"}
+    if (
+        (regime == "HIGH_VOLATILITY" or premarket_high_volatility)
+        and technical_score < quality.high_volatility_min_score
+    ):
         direction = "WAIT"
-        reasons.append(
-            f"high-volatility market requires score >= {quality.high_volatility_min_score}"
-        )
+        if regime == "HIGH_VOLATILITY":
+            reasons.append(
+                f"high-volatility market requires score >= {quality.high_volatility_min_score}"
+            )
+        else:
+            reasons.append(
+                f"pre-market {premarket_volatility.lower()} volatility requires score >= "
+                f"{quality.high_volatility_min_score}"
+            )
 
     total_score = technical_score + context_score
     atr = _value(a, "atr14")
@@ -418,6 +461,9 @@ def build_signal(
         "option_bias": option_bias,
         "constituent_bias": constituent_bias,
         "constituent_news_bias": constituent_news_bias,
+        "premarket_context": fresh_premarket,
+        "premarket_bias": premarket_bias or None,
+        "premarket_volatility_regime": premarket_volatility or None,
         "market_regime": regime,
         "adx": adx if not pd.isna(adx) else None,
         "plus_di": plus_di if not pd.isna(plus_di) else None,

@@ -16,8 +16,11 @@ No order placement is implemented here.
 from collections.abc import Callable, Sequence
 from datetime import date, datetime
 from threading import RLock
+import time
 from typing import Any, cast
 from zoneinfo import ZoneInfo
+
+import requests
 
 from config import settings
 from kite_auth_store import load_access_token
@@ -34,6 +37,7 @@ except ImportError:
 Tick = dict[str, Any]
 TickCallback = Callable[[Sequence[Tick]], None]
 StatusCallback = Callable[[str, str | None], None]
+INSTRUMENT_DOWNLOAD_ATTEMPTS = 3
 
 class KiteMarketData:
     def __init__(self):
@@ -193,4 +197,21 @@ class KiteMarketData:
     def get_instruments(self, exchange: str = "NFO") -> list[dict[str, Any]]:
         if not self.kite:
             raise RuntimeError("Call connect() first")
-        return cast(list[dict[str, Any]], self.kite.instruments(exchange))
+        for attempt in range(1, INSTRUMENT_DOWNLOAD_ATTEMPTS + 1):
+            try:
+                with self.http_lock:
+                    instruments = self.kite.instruments(exchange)
+                return cast(list[dict[str, Any]], instruments)
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                if attempt == INSTRUMENT_DOWNLOAD_ATTEMPTS:
+                    raise
+                delay_seconds = 2 ** (attempt - 1)
+                print(
+                    f"Kite {exchange} instrument request failed "
+                    f"({type(exc).__name__}); retrying "
+                    f"{attempt + 1}/{INSTRUMENT_DOWNLOAD_ATTEMPTS} "
+                    f"in {delay_seconds}s.",
+                    flush=True,
+                )
+                time.sleep(delay_seconds)
+        raise RuntimeError("Kite instrument download retry loop exhausted")

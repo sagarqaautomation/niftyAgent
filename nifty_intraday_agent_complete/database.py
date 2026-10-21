@@ -1,18 +1,33 @@
 import os
 import json
 import sqlite3
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from config import settings
+
+SQLITE_BUSY_TIMEOUT_SECONDS = 30
+
+
+class _ClosingSQLiteConnection(sqlite3.Connection):
+    def __exit__(self, exception_type, exception, traceback):
+        try:
+            return super().__exit__(exception_type, exception, traceback)
+        finally:
+            self.close()
+
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 def connect():
     os.makedirs(os.path.dirname(settings.db_path) or ".", exist_ok=True)
-    return sqlite3.connect(settings.db_path)
+    return sqlite3.connect(
+        settings.db_path,
+        timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
+        factory=_ClosingSQLiteConnection,
+    )
 
 def normalize_candle_timestamps() -> None:
     timezone_info = ZoneInfo(settings.market_timezone)
@@ -232,6 +247,7 @@ def expire_stale_equity_signals(
 
 def init_db():
     with connect() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         with open("schema.sql", "r", encoding="utf-8") as f:
             conn.executescript(f.read())
     ensure_market_status_columns()
@@ -773,12 +789,32 @@ def list_equity_signals(limit: int = 50) -> list[dict[str, Any]]:
 def list_equity_signals_by_status(
     status: Literal["OPEN", "STOP_HIT", "TARGET_HIT", "EXPIRED"],
     limit: int = 50,
+    market_day: date | None = None,
 ) -> list[dict[str, Any]]:
+    if market_day is not None:
+        market_timezone = ZoneInfo(settings.market_timezone)
+        day_start = datetime(
+            market_day.year, market_day.month, market_day.day,
+            tzinfo=market_timezone,
+        )
+        day_end = day_start + timedelta(days=1)
+        start_utc = day_start.astimezone(timezone.utc).isoformat()
+        end_utc = day_end.astimezone(timezone.utc).isoformat()
+        query = """
+        SELECT * FROM equity_signals
+        WHERE status=? AND resolved_at>=? AND resolved_at<?
+        ORDER BY resolved_at DESC,id DESC LIMIT ?
+        """
+        parameters: tuple[Any, ...] = (status, start_utc, end_utc, limit)
+    else:
+        query = """
+        SELECT * FROM equity_signals WHERE status=? ORDER BY id DESC LIMIT ?
+        """
+        parameters = (status, limit)
+
     with connect() as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
-        SELECT * FROM equity_signals WHERE status=? ORDER BY id DESC LIMIT ?
-        """, (status, limit)).fetchall()
+        rows = conn.execute(query, parameters).fetchall()
         return [dict(row) for row in rows]
 
 def equity_signal_performance() -> dict[str, int | float | None]:

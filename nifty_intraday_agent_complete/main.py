@@ -41,6 +41,12 @@ CandleFrames = dict[str, pd.DataFrame]
 CandleRecord = dict[str, Any]
 Tick = Mapping[str, Any]
 
+
+class _NoBrokerQuotes:
+    def quotes(self, instruments: list[str]) -> dict[str, Any]:
+        return {}
+
+
 _live_trade_quality_model_cache: dict[str, Any] | None = None
 _live_trade_quality_model_loaded = False
 
@@ -219,6 +225,7 @@ def process_frames(
         constituent_bias=constituent_bias,
         constituent_news_bias=constituent_news_bias,
         trade_quality_model=live_trade_quality_model(),
+        premarket_context=premarket_context,
     )
     signal["constituent_metrics"] = dict(constituent_metrics or {})
     signal["constituent_news_metrics"] = dict(constituent_news_metrics or {})
@@ -241,8 +248,10 @@ def process_frames(
                 snapshot[field] = float(value)
         return snapshot
 
-    premarket = dict(premarket_context or {})
-    premarket_components = premarket.get("components") or {}
+    premarket = cast(dict[str, Any], signal.get("premarket_context") or {})
+    premarket_components = cast(
+        dict[str, Any], premarket.get("components") or {}
+    )
     signal["feature_snapshot"] = {
         "version": 3,
         "signal_candle_time": df1.index[-1].isoformat(),
@@ -288,6 +297,73 @@ def process_frames(
 
 def main() -> None:
     init_db()
+    news_items: list[NewsItem] = []
+    constituent_weights = load_constituent_weights(settings.nifty50_weights_path)
+    premarket_context_state: dict[str, Any] = {}
+    premarket_lock = threading.RLock()
+    premarket_stop = threading.Event()
+    premarket_broker: dict[str, Any] = {"client": _NoBrokerQuotes()}
+
+    def refresh_premarket_loop() -> None:
+        nonlocal news_items
+        if not settings.premarket_enabled:
+            print("Pre-market intelligence is disabled (PREMARKET_ENABLED=false)")
+            return
+
+        from premarket_collector import collect_live_premarket_context
+
+        last_news_refresh = 0.0
+        while not premarket_stop.is_set():
+            market_now = datetime.now(ZoneInfo(settings.market_timezone))
+            in_collection_window = (
+                market_now.weekday() < 5
+                and datetime_time(8, 0) <= market_now.time() < datetime_time(15, 30)
+            )
+            if not in_collection_window:
+                premarket_stop.wait(60)
+                continue
+
+            if (
+                settings.news_enabled
+                and time.monotonic() - last_news_refresh >= settings.news_refresh_seconds
+            ):
+                try:
+                    _, news_items = refresh_news()
+                    last_news_refresh = time.monotonic()
+                except Exception as exc:
+                    print(f"Pre-market news refresh failed: {type(exc).__name__}: {exc}", flush=True)
+
+            try:
+                snapshot = collect_live_premarket_context(
+                    premarket_broker["client"],
+                    news_items=news_items,
+                    weights=constituent_weights,
+                )
+                insert_premarket_snapshot(snapshot)
+                with premarket_lock:
+                    premarket_context_state.clear()
+                    premarket_context_state.update(snapshot)
+                print(
+                    "[PREMARKET]",
+                    f"time={snapshot.get('observed_at')}",
+                    f"bias={snapshot.get('directional_bias')}",
+                    f"score={snapshot.get('directional_score')}",
+                    f"vix={snapshot.get('india_vix')}",
+                    f"volatility={snapshot.get('volatility_regime')}",
+                    f"components={snapshot.get('available_components')}",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(f"Pre-market refresh failed: {type(exc).__name__}: {exc}", flush=True)
+            premarket_stop.wait(settings.premarket_refresh_seconds)
+
+    if settings.premarket_enabled and settings.live_market_data:
+        threading.Thread(
+            target=refresh_premarket_loop,
+            name="premarket-context-refresh",
+            daemon=True,
+        ).start()
+
     while not is_market_open():
         closed_reason = (
             "NSE market is closed. Live market data will start at 09:00 IST "
@@ -335,7 +411,6 @@ def main() -> None:
         print(closed_reason, flush=True)
         return
 
-    news_items: list[NewsItem] = []
     news_bias = "NEUTRAL"
     if settings.news_enabled:
         news_bias, news_items = refresh_news()
@@ -349,6 +424,7 @@ def main() -> None:
     spot_engine: Any = CandleEngine()
     try:
         broker: Any = KiteMarketData().connect()
+        premarket_broker["client"] = broker
     except Exception as exc:
         update_market_status(
             "ERROR", last_error=str(exc), analysis_state="ERROR",
@@ -450,51 +526,10 @@ def main() -> None:
     equity_cumulative_volumes: dict[str, float] = {}
     equity_volume_dates: dict[str, Any] = {}
     latest_equity_returns_pct: dict[str, float] = {}
-    constituent_weights = load_constituent_weights(settings.nifty50_weights_path)
     if constituent_weights:
         print(f"Loaded NIFTY constituent weights for {len(constituent_weights)} symbols")
     else:
         print("NIFTY weights file unavailable; constituent context will use equal-weight breadth")
-
-    premarket_context_state: dict[str, Any] = {}
-    premarket_lock = threading.RLock()
-    premarket_stop = threading.Event()
-
-    def refresh_premarket_loop() -> None:
-        if not settings.premarket_enabled:
-            print("Pre-market intelligence is disabled (PREMARKET_ENABLED=false)")
-            return
-        from premarket_collector import collect_live_premarket_context
-
-        while not premarket_stop.is_set():
-            try:
-                snapshot = collect_live_premarket_context(
-                    broker, news_items=news_items, weights=constituent_weights
-                )
-                insert_premarket_snapshot(snapshot)
-                with premarket_lock:
-                    premarket_context_state.clear()
-                    premarket_context_state.update(snapshot)
-                print(
-                    "[PREMARKET]",
-                    f"time={snapshot.get('observed_at')}",
-                    f"bias={snapshot.get('directional_bias')}",
-                    f"score={snapshot.get('directional_score')}",
-                    f"vix={snapshot.get('india_vix')}",
-                    f"volatility={snapshot.get('volatility_regime')}",
-                    f"components={snapshot.get('available_components')}",
-                    flush=True,
-                )
-            except Exception as exc:
-                print(f"Pre-market refresh failed: {type(exc).__name__}: {exc}", flush=True)
-            premarket_stop.wait(settings.premarket_refresh_seconds)
-
-    if settings.premarket_enabled:
-        threading.Thread(
-            target=refresh_premarket_loop,
-            name="premarket-context-refresh",
-            daemon=True,
-        ).start()
 
     try:
         history_end = pd.Timestamp.now(tz=settings.market_timezone).to_pydatetime()
@@ -753,6 +788,8 @@ def main() -> None:
                     for key in ("open", "high", "low", "close")
                 }, closed_equity_time.to_pydatetime())
 
+                with premarket_lock:
+                    current_premarket_context = dict(premarket_context_state)
                 equity_signal = build_equity_buy_signal(
                     equity_symbol,
                     equity_frames,
@@ -763,6 +800,7 @@ def main() -> None:
                         equity_news_aliases.get(equity_symbol, [equity_symbol]),
                         quality.news_max_age_minutes,
                     ),
+                    premarket_context=current_premarket_context,
                 )
                 if equity_signal is None:
                     active_equity_setups.discard(equity_symbol)

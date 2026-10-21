@@ -1,10 +1,11 @@
 import csv
 import math
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Mapping, cast
 
 import pandas as pd
 
+from accuracy_config import quality_settings as quality
 from indicators import detect_latest_candlestick_patterns
 from signal_engine import add_risk_levels, build_signal
 
@@ -62,6 +63,7 @@ def build_equity_buy_signal(
     news_bias: str = "NEUTRAL",
     one_minute_pattern_rows: dict[pd.Timestamp, list[dict[str, str]]] | None = None,
     five_minute_pattern_rows: dict[pd.Timestamp, list[dict[str, str]]] | None = None,
+    premarket_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     minute_frame = frames["1min"]
     five_minute_frame = frames["5min"]
@@ -90,8 +92,12 @@ def build_equity_buy_signal(
         news_bias,
         "NEUTRAL",
         candlestick_patterns=one_minute_patterns,
+        premarket_context=premarket_context,
     )
     if analysis["signal"] != "CALL":
+        return None
+    relative_volume = analysis.get("relative_volume")
+    if relative_volume is None or float(relative_volume) < quality.relative_volume_threshold:
         return None
 
     five_minute_patterns = (
@@ -149,6 +155,7 @@ def build_equity_buy_signal(
         "signal_candle_time": signal["signal_candle_time"],
         "entry_price": float(live_price),
         "news_bias": news_bias,
+        "premarket_context": dict(analysis.get("premarket_context") or {}),
         "one_minute": _feature_row_snapshot(closed_minutes),
         "five_minute": _feature_row_snapshot(closed_five_minutes),
         "one_minute_patterns": one_minute_patterns,

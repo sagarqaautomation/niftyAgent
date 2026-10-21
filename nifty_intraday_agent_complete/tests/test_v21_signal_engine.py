@@ -1,4 +1,6 @@
 import unittest
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -90,6 +92,78 @@ class SignalEngineV21Tests(unittest.TestCase):
         )
         self.assertEqual(conflicting["candlestick_score"], 0)
         self.assertIn("conflicting candlestick patterns", conflicting["reason"])
+
+    def test_fresh_bearish_premarket_context_blocks_bullish_setup(self) -> None:
+        frame = add_indicators(self._frame())
+        five = add_indicators(
+            frame.resample("5min").agg(
+                open=("open", "first"),
+                high=("high", "max"),
+                low=("low", "min"),
+                close=("close", "last"),
+                volume=("volume", "sum"),
+            ).dropna()
+        )
+        context = {
+            "observed_at": datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(),
+            "directional_bias": "BEARISH_BIAS",
+            "volatility_regime": "LOWER",
+        }
+
+        result = build_signal(frame, five, premarket_context=context)
+
+        self.assertEqual(result["premarket_bias"], "BEARISH_BIAS")
+        self.assertEqual(result["signal"], "WAIT")
+        self.assertIn("strongly conflicting external context", result["reason"])
+
+    def test_fresh_high_premarket_vix_raises_score_floor(self) -> None:
+        frame = add_indicators(self._frame())
+        five = add_indicators(
+            frame.resample("5min").agg(
+                open=("open", "first"),
+                high=("high", "max"),
+                low=("low", "min"),
+                close=("close", "last"),
+                volume=("volume", "sum"),
+            ).dropna()
+        )
+        context = {
+            "observed_at": datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(),
+            "directional_bias": "INSUFFICIENT_DATA",
+            "volatility_regime": "HIGH",
+        }
+
+        result = build_signal(frame, five, premarket_context=context)
+
+        self.assertEqual(result["premarket_volatility_regime"], "HIGH")
+        self.assertEqual(result["signal"], "WAIT")
+        self.assertIn("pre-market high volatility requires score", result["reason"])
+
+    def test_stale_premarket_context_is_ignored(self) -> None:
+        frame = add_indicators(self._frame())
+        five = add_indicators(
+            frame.resample("5min").agg(
+                open=("open", "first"),
+                high=("high", "max"),
+                low=("low", "min"),
+                close=("close", "last"),
+                volume=("volume", "sum"),
+            ).dropna()
+        )
+        context = {
+            "observed_at": (
+                datetime.now(ZoneInfo("Asia/Kolkata")) - timedelta(days=1)
+            ).isoformat(),
+            "directional_bias": "BEARISH_BIAS",
+            "volatility_regime": "HIGH",
+        }
+
+        baseline = build_signal(frame, five)
+        stale = build_signal(frame, five, premarket_context=context)
+
+        self.assertEqual(stale["signal"], baseline["signal"])
+        self.assertEqual(stale["context_score"], baseline["context_score"])
+        self.assertIsNone(stale["premarket_bias"])
 
 
 if __name__ == "__main__":
