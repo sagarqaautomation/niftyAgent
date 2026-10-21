@@ -1,5 +1,6 @@
 import os
 from getpass import getpass
+import sys
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,6 +24,9 @@ except ImportError as exc:
 
 if not ENV_FILE.is_file():
     raise FileNotFoundError(f"Project .env file not found: {ENV_FILE}")
+
+sys.path.insert(0, str(PROJECT_DIR))
+from kite_auth_store import save_access_token
 
 load_dotenv(ENV_FILE, override=True)
 
@@ -55,4 +59,6 @@ updated, _, _ = set_key(
 if not updated:
     raise RuntimeError(f"Could not update {ENV_FILE}; check file permissions.")
 
-print(f"Kite access token saved to {ENV_FILE}")
+save_access_token(session["access_token"], session.get("public_token"))
+print(f"Kite access token saved to {ENV_FILE} and token store")
+print("Restart NiftyAgent after generating a new token.")
