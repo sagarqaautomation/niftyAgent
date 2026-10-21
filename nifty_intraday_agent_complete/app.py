@@ -182,14 +182,14 @@ def render_signals() -> None:
             "signal_candle_time", "status", "reason",
         ]
         signals_df = signals_df[[column for column in display_cols if column in signals_df.columns]]
-        streamlit_ui.dataframe(signals_df, width="stretch", hide_index=True)
+        streamlit_ui.dataframe(signals_df, use_container_width=True, hide_index=True)
     else:
         st.info("No NIFTY CALL/PUT signals have fired yet.")
 
     st.subheader("Recent NIFTY Spot Candles")
     candles_df = pd.DataFrame(list_spot_candles(20))
     if not candles_df.empty:
-        streamlit_ui.dataframe(candles_df, width="stretch", hide_index=True)
+        streamlit_ui.dataframe(candles_df, use_container_width=True, hide_index=True)
     else:
         st.info("No NIFTY spot candles have been stored yet.")
 
@@ -232,7 +232,7 @@ def render_patterns() -> None:
     st.caption("Patterns are confirmed on the latest fully closed candle.")
     if nifty_patterns:
         streamlit_ui.dataframe(
-            pd.DataFrame(nifty_patterns), width="stretch", hide_index=True
+            pd.DataFrame(nifty_patterns), use_container_width=True, hide_index=True
         )
     else:
         st.info("No pattern detected on the latest closed NIFTY candles.")
@@ -262,7 +262,7 @@ def render_patterns() -> None:
             })
     if equity_patterns:
         streamlit_ui.dataframe(
-            pd.DataFrame(equity_patterns), width="stretch", hide_index=True
+            pd.DataFrame(equity_patterns), use_container_width=True, hide_index=True
         )
     else:
         st.info("No equity patterns detected in the last six minutes.")
@@ -285,7 +285,7 @@ def render_equities() -> None:
                 "expected_holding_minutes", "signal_candle_time", "status", "reason",
             ]
             equity_df = equity_df[[column for column in equity_cols if column in equity_df.columns]]
-            streamlit_ui.dataframe(equity_df, width="stretch", hide_index=True)
+            streamlit_ui.dataframe(equity_df, use_container_width=True, hide_index=True)
         else:
             st.info(
                 "No open equity BUY setups right now. The scanner continues "
@@ -311,7 +311,7 @@ def render_equities() -> None:
                     "result_price": "Hit bar close",
                     "total_score": "Score",
                 })
-                streamlit_ui.dataframe(stop_df, width="stretch", hide_index=True)
+                streamlit_ui.dataframe(stop_df, use_container_width=True, hide_index=True)
             else:
                 st.info("No stop losses have been hit.")
 
@@ -329,7 +329,7 @@ def render_equities() -> None:
                     "result_price": "Hit bar close",
                     "total_score": "Score",
                 })
-                streamlit_ui.dataframe(target_df, width="stretch", hide_index=True)
+                streamlit_ui.dataframe(target_df, use_container_width=True, hide_index=True)
             else:
                 st.info("No targets have been hit.")
 
@@ -350,7 +350,7 @@ def render_equities() -> None:
                 "expected_holding_minutes": "Estimated hold (min)",
                 "total_score": "Score",
             })
-            streamlit_ui.dataframe(expired_df, width="stretch", hide_index=True)
+            streamlit_ui.dataframe(expired_df, use_container_width=True, hide_index=True)
         else:
             st.info("No equity signals have expired.")
 
@@ -364,7 +364,7 @@ def render_equities() -> None:
                 "timestamp": "Candle time",
                 "pattern_names": "Detected patterns",
             })
-            streamlit_ui.dataframe(pattern_df, width="stretch", hide_index=True)
+            streamlit_ui.dataframe(pattern_df, use_container_width=True, hide_index=True)
         else:
             st.info("No candlestick patterns detected in stored equity candles yet.")
         st.caption(
@@ -385,7 +385,7 @@ def render_equities() -> None:
             {"Metric": "Accuracy", "Value": f"{accuracy}%" if accuracy is not None else "N/A"},
         ])
         st.subheader("Equity Outcome Summary")
-        streamlit_ui.dataframe(summary_df, width="stretch", hide_index=True)
+        streamlit_ui.dataframe(summary_df, use_container_width=True, hide_index=True)
         st.caption(
             "Outcome lists show this market day only; the summary retains all historical results."
         )
@@ -437,7 +437,7 @@ def render_news() -> None:
                 )
         streamlit_ui.dataframe(
             visible_news,
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
             column_config={
                 "url": streamlit_ui.column_config.LinkColumn(
