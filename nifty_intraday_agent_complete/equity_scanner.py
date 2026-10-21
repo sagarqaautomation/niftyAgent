@@ -48,7 +48,8 @@ def _feature_row_snapshot(frame: pd.DataFrame) -> dict[str, float | None]:
     row = frame.iloc[-1]
     fields = (
         "open", "high", "low", "close", "volume", "ema9", "ema21",
-        "rsi14", "vwap", "atr14",
+        "rsi14", "vwap", "atr14", "adx14", "relative_volume20",
+        "body_pct", "opening_range_high", "opening_range_low",
     )
     return {
         field: float(row[field]) if field in row.index and pd.notna(row[field]) else None
