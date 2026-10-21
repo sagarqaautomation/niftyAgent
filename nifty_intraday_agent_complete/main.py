@@ -17,7 +17,7 @@ from database import (
     expire_stale_equity_signals, list_equity_signals_by_status,
     resolve_equity_signal_at_price,
     update_analysis_status, utc_now, insert_premarket_snapshot,
-    update_equity_scan_status
+    update_equity_scan_status, update_kite_auth_status
 )
 from news_sources import (
     aggregate_news,
@@ -427,11 +427,22 @@ def main() -> None:
     spot_engine: Any = CandleEngine()
     try:
         broker: Any = KiteMarketData().connect()
+        # connect() verifies the saved access token against Kite's authenticated
+        # profile endpoint before we report authentication success.
+        update_kite_auth_status(
+            "SUCCESS", "Kite REST authentication verified successfully."
+        )
+        print("Kite authentication: SUCCESS (REST profile check)", flush=True)
         premarket_broker["client"] = broker
     except Exception as exc:
+        # Keep the UI useful even when token validation fails. Avoid printing
+        # credentials; show only the exception type and broker-provided message.
+        auth_reason = f"{type(exc).__name__}: {exc}"
+        update_kite_auth_status("FAILED", auth_reason)
+        print(f"Kite authentication: FAILED — {auth_reason}", flush=True)
         update_market_status(
-            "ERROR", last_error=str(exc), analysis_state="ERROR",
-            analysis_reason=f"Broker connection failed: {exc}",
+            "ERROR", last_error=auth_reason, analysis_state="ERROR",
+            analysis_reason=f"Broker connection/authentication failed: {auth_reason}",
             analysis_updated_at=utc_now(),
         )
         raise
