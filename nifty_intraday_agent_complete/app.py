@@ -10,7 +10,7 @@ from market_hours import is_market_open
 from database import (
     init_db, performance, latest_signal, list_signals, list_news, list_spot_candles,
     get_market_status, list_equity_signals_by_status, equity_signal_performance,
-    list_recent_equity_patterns,
+    list_recent_equity_patterns, list_equity_scan_status,
 )
 from indicators import detect_latest_candlestick_patterns
 from equity_scanner import load_watchlist
@@ -273,6 +273,32 @@ def render_patterns() -> None:
 @st.fragment(run_every=5)
 def render_equities() -> None:
     market_day = datetime.now(ZoneInfo(settings.market_timezone)).date()
+    st.subheader("Live Equity Scanner Diagnostics")
+    scanner_rows = list_equity_scan_status(200)
+    if scanner_rows:
+        scanner_df = pd.DataFrame(scanner_rows)
+        scanner_display_cols = [
+            "symbol", "last_price", "last_tick_at", "one_minute_bars",
+            "five_minute_bars", "last_evaluated_at", "rejection_reason",
+        ]
+        scanner_df = scanner_df[
+            [column for column in scanner_display_cols if column in scanner_df.columns]
+        ].rename(columns={
+            "symbol": "Stock",
+            "last_price": "Latest price",
+            "last_tick_at": "Last tick",
+            "one_minute_bars": "1m bars",
+            "five_minute_bars": "5m bars",
+            "last_evaluated_at": "Last evaluation",
+            "rejection_reason": "Scanner status / rejection reason",
+        })
+        streamlit_ui.dataframe(scanner_df, use_container_width=True, hide_index=True)
+    else:
+        st.info(
+            "No per-stock scanner diagnostics have been recorded yet. "
+            "Check the worker log for watchlist resolution and subscription errors."
+        )
+
     st.subheader("Recent Equity BUY Signals")
     st.caption(
         "Holding time extrapolates recent one-minute price movement; it is not a forecast or guarantee."
