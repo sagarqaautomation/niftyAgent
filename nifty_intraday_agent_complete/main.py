@@ -265,6 +265,7 @@ def process_frames(
         "constituent_news_bias": constituent_news_bias,
         "constituent_news_metrics": dict(constituent_news_metrics or {}),
         "premarket_context": premarket,
+        "pattern_confirmation": signal.get("pattern_confirmation") or [],
         # Flat numeric candidate features simplify later CSV/model experiments.
         "premarket_directional_score": premarket.get("directional_score"),
         "premarket_india_vix": premarket.get("india_vix"),
@@ -663,6 +664,24 @@ def main() -> None:
                             "close": spot_bar["close"],
                         })
                         expire_signals()
+                        # Research-only online learning: fit a candidate only from
+                        # resolved, point-in-time signal snapshots. This never changes
+                        # the active model and never places orders.
+                        try:
+                            from live_learning import maybe_train_candidate
+                            learning_report = maybe_train_candidate()
+                            if learning_report and learning_report.get("status") != "INSUFFICIENT_DATA":
+                                print(
+                                    "[LIVE LEARNING]",
+                                    f"status={learning_report.get('status')}",
+                                    f"resolved={learning_report.get('resolved_samples')}",
+                                    f"holdout={learning_report.get('holdout', {}).get('samples', 0)}",
+                                    "active_model_changed=false",
+                                    flush=True,
+                                )
+                        except Exception as exc:
+                            # Training failures must not interrupt live market collection.
+                            print(f"[LIVE LEARNING] candidate training skipped: {type(exc).__name__}: {exc}", flush=True)
 
             now = time.monotonic()
             if now - last_spot_status_write >= 1:
