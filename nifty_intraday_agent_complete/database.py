@@ -630,7 +630,45 @@ def insert_signal(s: dict[str, Any]) -> int:
         row_id = cur.lastrowid
         return int(row_id) if row_id is not None else 0
 
-def resolve_with_bar(bar: dict[str, Any]) -> None:
+def _bar_starts_after_signal(
+    bar_timestamp: datetime | str | None,
+    signal_created_at: datetime | str,
+) -> bool:
+    """Avoid resolving a signal against a candle that started before it existed."""
+    if bar_timestamp is None:
+        # Compatibility for non-live callers; the live worker always supplies
+        # the timestamp so outcomes cannot be resolved with pre-entry candles.
+        return True
+    try:
+        bar_time = (
+            bar_timestamp
+            if isinstance(bar_timestamp, datetime)
+            else datetime.fromisoformat(str(bar_timestamp))
+        )
+        created_time = (
+            signal_created_at
+            if isinstance(signal_created_at, datetime)
+            else datetime.fromisoformat(str(signal_created_at))
+        )
+    except (TypeError, ValueError):
+        # If either timestamp is malformed, do not record an untrustworthy result.
+        return False
+
+    market_tz = ZoneInfo(settings.market_timezone)
+    if bar_time.tzinfo is None:
+        bar_time = bar_time.replace(tzinfo=market_tz)
+    if created_time.tzinfo is None:
+        created_time = created_time.replace(tzinfo=timezone.utc)
+    # Candle timestamps denote the candle's opening time. Require the candle
+    # to start strictly after signal creation to avoid using pre-entry prices
+    # from the signal's own minute.
+    return bar_time.astimezone(timezone.utc) > created_time.astimezone(timezone.utc)
+
+
+def resolve_with_bar(
+    bar: dict[str, Any],
+    bar_timestamp: datetime | str | None = None,
+) -> None:
     with connect() as conn:
         rows = conn.execute("""
         SELECT id, signal, entry_price, target_price, stop_loss, created_at
@@ -638,8 +676,10 @@ def resolve_with_bar(bar: dict[str, Any]) -> None:
         """).fetchall()
 
         for row in rows:
-            sid, signal, entry, target, stop, _ = row
+            sid, signal, entry, target, stop, created_at = row
             if not entry or not target or not stop:
+                continue
+            if not _bar_starts_after_signal(bar_timestamp, created_at):
                 continue
 
             target_hit = False
@@ -666,7 +706,7 @@ def resolve_with_bar(bar: dict[str, Any]) -> None:
                 conn.execute("""
                 UPDATE signals SET status=?, result_price=?, resolved_at=?,
                 accuracy=?, evaluation_minutes=?
-                WHERE id=?
+                WHERE id=? AND status='OPEN'
                 """, (
                     status, bar["close"], utc_now(), accuracy,
                     None, sid
