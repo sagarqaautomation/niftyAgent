@@ -583,7 +583,11 @@ def main() -> None:
     if equity_engines:
         equity_history_end = pd.Timestamp.now(tz=settings.market_timezone).to_pydatetime()
         equity_history_start = equity_history_end - timedelta(days=5)
-        for symbol, token in equity_tokens_by_symbol.items():
+        for equity_index, (symbol, token) in enumerate(equity_tokens_by_symbol.items()):
+            # Stay under broker historical-data request limits while warming a
+            # large watchlist (typically up to 200 symbols).
+            if equity_index:
+                time.sleep(0.35)
             try:
                 equity_history = broker.historical_data(
                     token, equity_history_start, equity_history_end, "minute"
