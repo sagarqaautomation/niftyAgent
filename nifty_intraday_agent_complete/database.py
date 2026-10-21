@@ -70,6 +70,9 @@ def ensure_market_status_columns() -> None:
         "analysis_updated_at": "TEXT",
         "spot_last_price": "REAL",
         "spot_last_tick_at": "TEXT",
+        "kite_auth_state": "TEXT NOT NULL DEFAULT 'UNKNOWN'",
+        "kite_auth_reason": "TEXT",
+        "kite_auth_checked_at": "TEXT",
     }
     with connect() as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(market_status)")}
@@ -544,6 +547,16 @@ def get_market_status() -> dict[str, Any] | None:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM market_status WHERE id=1").fetchone()
         return dict(row) if row else None
+
+def update_kite_auth_status(state: str, reason: str) -> None:
+    """Persist the result of the Kite REST authentication check for the UI."""
+    with connect() as conn:
+        conn.execute("""
+        UPDATE market_status
+        SET kite_auth_state=?, kite_auth_reason=?, kite_auth_checked_at=?, updated_at=?
+        WHERE id=1
+        """, (state, reason, utc_now(), utc_now()))
+
 
 def update_analysis_status(state: str, score: int | None, reason: str) -> None:
     with connect() as conn:
