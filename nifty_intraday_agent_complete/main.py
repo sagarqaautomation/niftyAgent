@@ -738,7 +738,7 @@ def main() -> None:
         update_market_status(
             state,
             connected_at=utc_now() if state == "CONNECTED" else None,
-            last_error=detail if state in {"ERROR", "DISCONNECTED"} else None,
+            last_error=detail if state in {"ERROR", "DISCONNECTED", "RECONNECTING"} else ("" if state == "CONNECTED" else None),
         )
 
     spot_lock = threading.RLock()
