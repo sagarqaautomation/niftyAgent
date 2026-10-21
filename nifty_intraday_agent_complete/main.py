@@ -567,6 +567,7 @@ def main() -> None:
     equity_cumulative_volumes: dict[str, float] = {}
     equity_volume_dates: dict[str, Any] = {}
     latest_equity_returns_pct: dict[str, float] = {}
+    last_equity_learning_check = 0.0
     # Persist scanner status for every configured symbol, including symbols
     # that have not produced a qualifying BUY signal.
     for symbol, token in equity_tokens_by_symbol.items():
@@ -799,6 +800,7 @@ def main() -> None:
         nonlocal latest_future_price, latest_future_time
         nonlocal latest_spot_atr, last_resolved_spot_minute
         nonlocal last_alert_direction, last_alert_bar, setup_reset_count
+        nonlocal last_equity_learning_check
         for tick in ticks:
             tick_token = tick.get("instrument_token")
             equity_symbol = (
@@ -922,6 +924,29 @@ def main() -> None:
                     key: float(cast(float, equity_bar[key]))
                     for key in ("open", "high", "low", "close")
                 }, closed_equity_time.to_pydatetime())
+
+                # Check the research-only equity learner at most once every
+                # five minutes, not once per stock tick. It trains only from
+                # completed target/stop outcomes and never promotes a model.
+                learning_now = time.monotonic()
+                if learning_now - last_equity_learning_check >= 300:
+                    last_equity_learning_check = learning_now
+                    try:
+                        from equity_live_learning import maybe_train_candidate as maybe_train_equity_candidate
+                        equity_learning_report = maybe_train_equity_candidate()
+                        if equity_learning_report and equity_learning_report.get("status") != "INSUFFICIENT_DATA":
+                            print(
+                                "[EQUITY LEARNING]",
+                                f"status={equity_learning_report.get('status')}",
+                                f"resolved={equity_learning_report.get('resolved_samples')}",
+                                "active_model_changed=false",
+                                flush=True,
+                            )
+                    except Exception as exc:
+                        print(
+                            f"[EQUITY LEARNING] candidate training skipped: {type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
 
                 with premarket_lock:
                     current_premarket_context = dict(premarket_context_state)
