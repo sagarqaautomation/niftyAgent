@@ -59,7 +59,9 @@ class KiteMarketData:
                 "Kite access token is missing. Open the backend /kite/login URL and complete Kite login."
             )
 
-        kite = KiteConnect(api_key=settings.kite_api_key)
+        # Bound REST calls so a stalled historical-data request cannot block
+        # startup indefinitely before the WebSocket is started.
+        kite = KiteConnect(api_key=settings.kite_api_key, timeout=10)
         kite.set_access_token(access_token)
         self.kite = kite
 
