@@ -68,9 +68,14 @@ class KiteMarketData:
         kite.profile()
         self.kite = kite
 
+        # Enable bounded automatic reconnection for transient network drops.
+        # The dashboard reports RECONNECTING until on_connect confirms recovery.
         self.ticker = KiteTicker(
             settings.kite_api_key,
-            access_token
+            access_token,
+            reconnect=True,
+            reconnect_max_tries=50,
+            reconnect_max_delay=60,
         )
 
         return self
@@ -98,8 +103,12 @@ class KiteMarketData:
             code: int | str | None,
             reason: str | None,
         ) -> None:
-            print("Kite WebSocket closed:", code, reason)
-            self._report_status("DISCONNECTED", f"{code}: {reason}")
+            print("Kite WebSocket closed:", code, reason, flush=True)
+            # KiteTicker's reconnect loop is enabled in the constructor above.
+            self._report_status(
+                "RECONNECTING",
+                f"WebSocket closed ({code}: {reason}); KiteTicker will attempt to reconnect.",
+            )
 
         def on_error(
             _ws: Any,
