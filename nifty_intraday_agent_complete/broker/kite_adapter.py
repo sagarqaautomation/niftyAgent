@@ -63,6 +63,9 @@ class KiteMarketData:
         # startup indefinitely before the WebSocket is started.
         kite = KiteConnect(api_key=settings.kite_api_key, timeout=10)
         kite.set_access_token(access_token)
+        # Verify that the API key/access token pair is accepted before
+        # reporting authentication success in the dashboard.
+        kite.profile()
         self.kite = kite
 
         self.ticker = KiteTicker(
