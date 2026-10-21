@@ -92,6 +92,11 @@ def render_live_status() -> None:
         st.info("NSE market is closed. Session hours: weekdays 09:00-15:30 IST.")
     elif feed and feed_state in {"ERROR", "DISCONNECTED"}:
         st.error(feed.get("last_error") or f"Market feed {feed_state.lower()}.")
+    elif feed_state == "RECONNECTING":
+        st.warning(
+            (feed.get("last_error") or "Kite WebSocket connection dropped.")
+            + " Automatic reconnection is in progress; do not rely on new signals until fresh ticks resume."
+        )
     elif feed_state == "CLOSED":
         st.info("NSE session is open, but the live market-data feed is stopped.")
     elif feed_state == "LIVE" and tick_age is not None and tick_age > 10:
