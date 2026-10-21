@@ -109,7 +109,20 @@ def render_live_status() -> None:
         elif analysis_state and analysis_state.endswith("_ALERT_NOT_SENT"):
             st.info(f"{analysis_state.split('_', 1)[0]} signal was saved. See the Signals tab.")
         elif analysis_state in {"CALL_TRIGGERED", "PUT_TRIGGERED"}:
-            st.info(f"{analysis_state.removesuffix('_TRIGGERED')} setup already triggered; waiting for reset.")
+            direction = analysis_state.removesuffix("_TRIGGERED")
+            if tick_age is not None and tick_age > 10:
+                st.warning(
+                    f"{direction} setup lock is active, but the market feed is stale "
+                    f"({tick_age:.0f}s since the last tick). A SUCCESS result in Recent Signals "
+                    "does not automatically reset the setup; fresh candles are needed to evaluate "
+                    "the reset condition. Restore the live feed before relying on new signals."
+                )
+            else:
+                st.info(
+                    f"{direction} setup lock is active. A SUCCESS result in Recent Signals "
+                    "records that signal's outcome; it does not automatically reset the setup. "
+                    "The strategy waits for its reset condition before alerting again."
+                )
         elif analysis_state == "WARMING_UP":
             st.info(f"Signal analysis warming up: {analysis_reason}")
         elif analysis_state == "CLOSED":
