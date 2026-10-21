@@ -59,6 +59,7 @@ updated, _, _ = set_key(
 if not updated:
     raise RuntimeError(f"Could not update {ENV_FILE}; check file permissions.")
 
+os.environ["KITE_TOKEN_FILE"] = str(PROJECT_DIR / "data" / "kite_token.json")
 save_access_token(session["access_token"], session.get("public_token"))
 print(f"Kite access token saved to {ENV_FILE} and token store")
 print("Restart NiftyAgent after generating a new token.")
