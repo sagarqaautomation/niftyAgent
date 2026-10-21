@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from datetime import datetime, timezone, tzinfo
 from typing import Any, cast
 from zoneinfo import ZoneInfo
@@ -273,6 +275,33 @@ def render_patterns() -> None:
 @st.fragment(run_every=5)
 def render_equities() -> None:
     market_day = datetime.now(ZoneInfo(settings.market_timezone)).date()
+    st.subheader("Equity Research Learning")
+    learning_report_path = Path("data/equity_live_learning_report.json")
+    if learning_report_path.exists():
+        try:
+            learning_report = json.loads(learning_report_path.read_text(encoding="utf-8"))
+            learning_status = str(learning_report.get("status", "UNKNOWN"))
+            st.write(
+                f"Status: {learning_status} · "
+                f"Resolved outcomes: {learning_report.get('resolved_samples', 0)} · "
+                f"Active model changed: {learning_report.get('active_model_changed', False)}"
+            )
+            holdout = learning_report.get("holdout") or {}
+            if holdout:
+                st.write(
+                    f"Chronological holdout: {holdout.get('samples', 0)} outcomes · "
+                    f"win rate: {holdout.get('win_rate_pct', 'N/A')}% · "
+                    f"Brier improvement vs baseline: "
+                    f"{holdout.get('brier_improvement_vs_baseline', 'N/A')}"
+                )
+        except (OSError, ValueError, TypeError) as exc:
+            st.warning(f"Could not read equity learning report: {exc}")
+    else:
+        st.info(
+            "No equity learning report yet. The learner needs at least 100 resolved "
+            "equity target/stop outcomes with feature snapshots before it can evaluate a candidate."
+        )
+
     st.subheader("Live Equity Scanner Diagnostics")
     scanner_rows = list_equity_scan_status(200)
     if scanner_rows:
