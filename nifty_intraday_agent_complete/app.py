@@ -13,6 +13,7 @@ from database import (
     list_recent_equity_patterns,
 )
 from indicators import detect_latest_candlestick_patterns
+from equity_scanner import load_watchlist
 
 init_db()
 
@@ -277,6 +278,26 @@ def render_equities() -> None:
         "Holding time extrapolates recent one-minute price movement; it is not a forecast or guarantee."
     )
     if settings.equity_scan_enabled:
+        try:
+            tracked_symbols = load_watchlist(settings.equity_watchlist_path)
+            st.subheader("Configured Equity Watchlist")
+            st.caption(
+                "These are the stocks the scanner is configured to monitor. "
+                "They are not BUY recommendations; qualifying BUY setups appear below."
+            )
+            if tracked_symbols:
+                st.write(" · ".join(tracked_symbols))
+            else:
+                st.warning(
+                    f"No symbols found in {settings.equity_watchlist_path}. "
+                    "Add stock symbols under the 'symbol' column."
+                )
+        except Exception as exc:
+            st.error(
+                f"Could not load equity watchlist ({settings.equity_watchlist_path}): "
+                f"{type(exc).__name__}: {exc}"
+            )
+
         equity_df = pd.DataFrame(list_equity_signals_by_status("OPEN", 50))
         if not equity_df.empty:
             equity_cols = [
