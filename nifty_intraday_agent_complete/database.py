@@ -257,9 +257,71 @@ def init_db():
     ensure_equity_feature_snapshot_column()
     ensure_equity_candle_patterns_column()
     ensure_equity_signal_expired_status()
+    ensure_equity_scan_status_table()
     expire_overdue_equity_outcomes()
     expire_stale_equity_signals()
     normalize_candle_timestamps()
+
+def ensure_equity_scan_status_table() -> None:
+    with connect() as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS equity_scan_status (
+            symbol TEXT PRIMARY KEY,
+            instrument_token INTEGER,
+            last_price REAL,
+            last_tick_at TEXT,
+            one_minute_bars INTEGER NOT NULL DEFAULT 0,
+            five_minute_bars INTEGER NOT NULL DEFAULT 0,
+            last_evaluated_at TEXT,
+            rejection_reason TEXT NOT NULL DEFAULT 'Waiting for first live tick',
+            updated_at TEXT NOT NULL
+        )
+        """)
+
+
+def update_equity_scan_status(
+    symbol: str,
+    instrument_token: int | None = None,
+    last_price: float | None = None,
+    last_tick_at: str | None = None,
+    one_minute_bars: int | None = None,
+    five_minute_bars: int | None = None,
+    last_evaluated_at: str | None = None,
+    rejection_reason: str | None = None,
+) -> None:
+    with connect() as conn:
+        conn.execute("""
+        INSERT INTO equity_scan_status
+        (symbol,instrument_token,last_price,last_tick_at,one_minute_bars,
+         five_minute_bars,last_evaluated_at,rejection_reason,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(symbol) DO UPDATE SET
+          instrument_token=COALESCE(excluded.instrument_token,equity_scan_status.instrument_token),
+          last_price=COALESCE(excluded.last_price,equity_scan_status.last_price),
+          last_tick_at=COALESCE(excluded.last_tick_at,equity_scan_status.last_tick_at),
+          one_minute_bars=COALESCE(excluded.one_minute_bars,equity_scan_status.one_minute_bars),
+          five_minute_bars=COALESCE(excluded.five_minute_bars,equity_scan_status.five_minute_bars),
+          last_evaluated_at=COALESCE(excluded.last_evaluated_at,equity_scan_status.last_evaluated_at),
+          rejection_reason=COALESCE(excluded.rejection_reason,equity_scan_status.rejection_reason),
+          updated_at=excluded.updated_at
+        """, (
+            symbol, instrument_token, last_price, last_tick_at, one_minute_bars,
+            five_minute_bars, last_evaluated_at, rejection_reason or "Waiting for evaluation",
+            utc_now(),
+        ))
+
+
+def list_equity_scan_status(limit: int = 200) -> list[dict[str, Any]]:
+    with connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+        SELECT symbol,instrument_token,last_price,last_tick_at,one_minute_bars,
+               five_minute_bars,last_evaluated_at,rejection_reason,updated_at
+        FROM equity_scan_status
+        ORDER BY symbol ASC LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(row) for row in rows]
+
 
 def ensure_premarket_snapshots_table() -> None:
     with connect() as conn:
