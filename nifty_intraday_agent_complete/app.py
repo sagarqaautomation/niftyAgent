@@ -46,6 +46,9 @@ def render_live_status() -> None:
         if feed else None
     )
     spot_price = feed.get("spot_last_price") if feed else None
+    kite_auth_state = feed.get("kite_auth_state", "UNKNOWN") if feed else "UNKNOWN"
+    kite_auth_reason = feed.get("kite_auth_reason") if feed else None
+    kite_auth_checked_at = feed.get("kite_auth_checked_at") if feed else None
     one_minute_bars = feed.get("one_minute_bars", 0) if feed else 0
     five_minute_bars = feed.get("five_minute_bars", 0) if feed else 0
     latest_candles = list_spot_candles(1)
@@ -76,6 +79,14 @@ def render_live_status() -> None:
         f"{min(one_minute_bars, 30)}/30 · {min(five_minute_bars, 30)}/30",
     )
     status_cols[3].metric("Last spot candle", str(candle_time or "No spot candle"))
+
+    if kite_auth_state == "SUCCESS":
+        auth_checked = f" · checked {kite_auth_checked_at}" if kite_auth_checked_at else ""
+        st.success(f"Kite authentication: SUCCESS — API key/access token accepted{auth_checked}.")
+    elif kite_auth_state == "FAILED":
+        st.error(f"Kite authentication: FAILED — {kite_auth_reason or 'Check Kite credentials and access token.'}")
+    else:
+        st.info("Kite authentication: NOT VERIFIED yet. The worker must complete the Kite profile check.")
 
     if not market_open:
         st.info("NSE market is closed. Session hours: weekdays 09:00-15:30 IST.")
