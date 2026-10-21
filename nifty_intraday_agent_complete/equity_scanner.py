@@ -64,10 +64,16 @@ def build_equity_buy_signal(
     one_minute_pattern_rows: dict[pd.Timestamp, list[dict[str, str]]] | None = None,
     five_minute_pattern_rows: dict[pd.Timestamp, list[dict[str, str]]] | None = None,
     premarket_context: Mapping[str, Any] | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
+    def reject(reason: str) -> None:
+        if diagnostics is not None:
+            diagnostics["reason"] = reason
+
     minute_frame = frames["1min"]
     five_minute_frame = frames["5min"]
     if minute_frame.empty or five_minute_frame.empty:
+        reject("Waiting for 1-minute and 5-minute candle history")
         return None
 
     current_minute = cast(pd.Timestamp, minute_frame.index[-1])
@@ -78,6 +84,7 @@ def build_equity_buy_signal(
         five_minute_frame.index < current_minute.floor("5min")
     ]
     if closed_minutes.empty or closed_five_minutes.empty:
+        reject("Waiting for closed 1-minute and 5-minute candles")
         return None
 
     latest_one_minute = cast(pd.Timestamp, closed_minutes.index[-1])
@@ -95,9 +102,14 @@ def build_equity_buy_signal(
         premarket_context=premarket_context,
     )
     if analysis["signal"] != "CALL":
+        reject(f"Technical setup not bullish (engine returned {analysis['signal']})")
         return None
     relative_volume = analysis.get("relative_volume")
     if relative_volume is None or float(relative_volume) < quality.relative_volume_threshold:
+        reject(
+            "Relative volume below threshold"
+            if relative_volume is not None else "Relative volume unavailable"
+        )
         return None
 
     five_minute_patterns = (
@@ -117,10 +129,15 @@ def build_equity_buy_signal(
         if pattern["direction"] == "BEARISH"
     ]
     if not bullish_patterns or bearish_patterns:
+        if bearish_patterns:
+            reject("Bearish candlestick pattern conflicts with BUY setup")
+        else:
+            reject("No qualifying bullish candlestick pattern")
         return None
 
     atr = analysis.get("atr")
     if atr is None or pd.isna(atr) or float(atr) <= 0:
+        reject("ATR unavailable or non-positive")
         return None
 
     signal = dict(analysis)
@@ -161,6 +178,8 @@ def build_equity_buy_signal(
         "one_minute_patterns": one_minute_patterns,
         "five_minute_patterns": five_minute_patterns,
     }
+    if diagnostics is not None:
+        diagnostics["reason"] = "BUY setup passed all scanner filters"
     return signal
 
 
