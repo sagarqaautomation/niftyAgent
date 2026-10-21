@@ -16,7 +16,8 @@ from database import (
     resolve_equity_signal,
     expire_stale_equity_signals, list_equity_signals_by_status,
     resolve_equity_signal_at_price,
-    update_analysis_status, utc_now, insert_premarket_snapshot
+    update_analysis_status, utc_now, insert_premarket_snapshot,
+    update_equity_scan_status
 )
 from news_sources import (
     aggregate_news,
@@ -566,6 +567,69 @@ def main() -> None:
     equity_cumulative_volumes: dict[str, float] = {}
     equity_volume_dates: dict[str, Any] = {}
     latest_equity_returns_pct: dict[str, float] = {}
+    # Persist scanner status for every configured symbol, including symbols
+    # that have not produced a qualifying BUY signal.
+    for symbol, token in equity_tokens_by_symbol.items():
+        update_equity_scan_status(
+            symbol,
+            instrument_token=token,
+            rejection_reason="Loading historical candles for warm-up",
+        )
+
+    # Warm each equity candle engine with recent Kite minute history before
+    # evaluating live setups. This avoids waiting for the scanner to build all
+    # indicator history from fresh ticks after startup.
+    if equity_engines:
+        equity_history_end = pd.Timestamp.now(tz=settings.market_timezone).to_pydatetime()
+        equity_history_start = equity_history_end - timedelta(days=5)
+        for symbol, token in equity_tokens_by_symbol.items():
+            try:
+                equity_history = broker.historical_data(
+                    token, equity_history_start, equity_history_end, "minute"
+                )
+                if not equity_history:
+                    update_equity_scan_status(
+                        symbol, instrument_token=token,
+                        rejection_reason="Kite returned no historical candles",
+                    )
+                    print(f"Equity warm-up: {symbol} returned no historical candles", flush=True)
+                    continue
+                equity_frames = equity_engines[symbol].load_history(equity_history)
+                historical_equity_rows: list[CandleRecord] = []
+                for timeframe, frame in equity_frames.items():
+                    historical_equity_rows.extend(
+                        equity_candle_records(symbol, timeframe, frame)
+                    )
+                insert_equity_candles(historical_equity_rows)
+                current_minute = pd.Timestamp.now(tz=settings.market_timezone).floor("min")
+                closed_minutes = equity_frames["1min"].loc[
+                    equity_frames["1min"].index < current_minute
+                ]
+                if not closed_minutes.empty:
+                    last_equity_processed[symbol] = cast(pd.Timestamp, closed_minutes.index[-1])
+                update_equity_scan_status(
+                    symbol,
+                    instrument_token=token,
+                    one_minute_bars=int(len(equity_frames["1min"])),
+                    five_minute_bars=int(len(equity_frames["5min"])),
+                    rejection_reason="Historical warm-up complete; waiting for live tick",
+                )
+                print(
+                    f"Equity warm-up: {symbol} loaded "
+                    f"{len(equity_frames['1min'])} 1m / {len(equity_frames['5min'])} 5m bars",
+                    flush=True,
+                )
+            except Exception as exc:
+                update_equity_scan_status(
+                    symbol,
+                    instrument_token=token,
+                    rejection_reason=f"Historical warm-up failed: {type(exc).__name__}: {exc}",
+                )
+                print(
+                    f"Equity warm-up failed for {symbol}: {type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+
     if constituent_weights:
         print(f"Loaded NIFTY constituent weights for {len(constituent_weights)} symbols")
     else:
@@ -781,7 +845,20 @@ def main() -> None:
 
                 equity_engine = equity_engines.get(equity_symbol)
                 if equity_engine is None:
+                    update_equity_scan_status(
+                        equity_symbol,
+                        instrument_token=int(tick_token) if tick_token is not None else None,
+                        last_price=float(equity_price),
+                        last_tick_at=equity_time.isoformat(),
+                        rejection_reason="No candle engine is configured for this symbol",
+                    )
                     continue
+                update_equity_scan_status(
+                    equity_symbol,
+                    instrument_token=int(tick_token) if tick_token is not None else None,
+                    last_price=float(equity_price),
+                    last_tick_at=equity_time.isoformat(),
+                )
                 try:
                     with equity_engine_locks[equity_symbol]:
                         equity_frames: CandleFrames = equity_engine.add_tick(
@@ -848,6 +925,7 @@ def main() -> None:
 
                 with premarket_lock:
                     current_premarket_context = dict(premarket_context_state)
+                scanner_diagnostic: dict[str, Any] = {}
                 equity_signal = build_equity_buy_signal(
                     equity_symbol,
                     equity_frames,
@@ -859,13 +937,48 @@ def main() -> None:
                         quality.news_max_age_minutes,
                     ),
                     premarket_context=current_premarket_context,
+                    diagnostics=scanner_diagnostic,
                 )
+                equity_one_minute_bars = int(len(equity_frames["1min"]))
+                equity_five_minute_bars = int(len(equity_frames["5min"]))
                 if equity_signal is None:
                     active_equity_setups.discard(equity_symbol)
+                    update_equity_scan_status(
+                        equity_symbol,
+                        instrument_token=int(tick_token) if tick_token is not None else None,
+                        last_price=float(equity_price),
+                        last_tick_at=equity_time.isoformat(),
+                        one_minute_bars=equity_one_minute_bars,
+                        five_minute_bars=equity_five_minute_bars,
+                        last_evaluated_at=utc_now(),
+                        rejection_reason=str(
+                            scanner_diagnostic.get("reason", "No qualifying BUY setup")
+                        ),
+                    )
                     continue
                 if spot_quote_age_seconds(equity_time) > 10:
+                    update_equity_scan_status(
+                        equity_symbol,
+                        instrument_token=int(tick_token) if tick_token is not None else None,
+                        last_price=float(equity_price),
+                        last_tick_at=equity_time.isoformat(),
+                        one_minute_bars=equity_one_minute_bars,
+                        five_minute_bars=equity_five_minute_bars,
+                        last_evaluated_at=utc_now(),
+                        rejection_reason="Quote is stale; signal suppressed",
+                    )
                     print(f"Skipping stale {equity_symbol} quote")
                     continue
+                update_equity_scan_status(
+                    equity_symbol,
+                    instrument_token=int(tick_token) if tick_token is not None else None,
+                    last_price=float(equity_price),
+                    last_tick_at=equity_time.isoformat(),
+                    one_minute_bars=equity_one_minute_bars,
+                    five_minute_bars=equity_five_minute_bars,
+                    last_evaluated_at=utc_now(),
+                    rejection_reason="BUY setup passed all scanner filters",
+                )
                 if equity_symbol in active_equity_setups:
                     continue
                 signal_id = insert_equity_signal(equity_signal)
