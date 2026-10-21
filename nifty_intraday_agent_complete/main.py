@@ -567,6 +567,7 @@ def main() -> None:
     equity_cumulative_volumes: dict[str, float] = {}
     equity_volume_dates: dict[str, Any] = {}
     latest_equity_returns_pct: dict[str, float] = {}
+    last_equity_status_write: dict[str, float] = {}
     last_equity_learning_check = 0.0
     # Persist scanner status for every configured symbol, including symbols
     # that have not produced a qualifying BUY signal.
@@ -859,12 +860,15 @@ def main() -> None:
                         rejection_reason="No candle engine is configured for this symbol",
                     )
                     continue
-                update_equity_scan_status(
-                    equity_symbol,
-                    instrument_token=int(tick_token) if tick_token is not None else None,
-                    last_price=float(equity_price),
-                    last_tick_at=equity_time.isoformat(),
-                )
+                status_now = time.monotonic()
+                if status_now - last_equity_status_write.get(equity_symbol, 0.0) >= 2:
+                    update_equity_scan_status(
+                        equity_symbol,
+                        instrument_token=int(tick_token) if tick_token is not None else None,
+                        last_price=float(equity_price),
+                        last_tick_at=equity_time.isoformat(),
+                    )
+                    last_equity_status_write[equity_symbol] = status_now
                 try:
                     with equity_engine_locks[equity_symbol]:
                         equity_frames: CandleFrames = equity_engine.add_tick(
