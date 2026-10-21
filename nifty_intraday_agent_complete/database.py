@@ -302,11 +302,11 @@ def update_equity_scan_status(
           one_minute_bars=COALESCE(excluded.one_minute_bars,equity_scan_status.one_minute_bars),
           five_minute_bars=COALESCE(excluded.five_minute_bars,equity_scan_status.five_minute_bars),
           last_evaluated_at=COALESCE(excluded.last_evaluated_at,equity_scan_status.last_evaluated_at),
-          rejection_reason=COALESCE(excluded.rejection_reason,equity_scan_status.rejection_reason),
+          rejection_reason=COALESCE(excluded.rejection_reason,equity_scan_status.rejection_reason,'Waiting for evaluation'),
           updated_at=excluded.updated_at
         """, (
             symbol, instrument_token, last_price, last_tick_at, one_minute_bars,
-            five_minute_bars, last_evaluated_at, rejection_reason or "Waiting for evaluation",
+            five_minute_bars, last_evaluated_at, rejection_reason,
             utc_now(),
         ))
 
