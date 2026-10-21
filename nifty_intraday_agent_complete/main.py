@@ -442,6 +442,44 @@ def main() -> None:
             future: dict[str, Any] = broker.get_front_future(settings.underlying)
             instrument_token = int(future["instrument_token"])
         spot_token = int(settings.nifty_instrument_token) if settings.nifty_instrument_token else None
+        if spot_token is None:
+            # Resolve the NSE NIFTY 50 index token automatically when the
+            # optional .env token is absent. This enables index WebSocket ticks
+            # and historical spot warm-up instead of relying on REST polling
+            # alone (which cannot build a warmed spot ATR by itself).
+            try:
+                nse_index_instruments = broker.get_instruments("NSE")
+                nifty_index = next(
+                    (
+                        item for item in nse_index_instruments
+                        if str(item.get("instrument_type", "")).upper() == "INDEX"
+                        and (
+                            str(item.get("tradingsymbol", "")).strip().upper() == "NIFTY 50"
+                            or str(item.get("name", "")).strip().upper() == "NIFTY 50"
+                        )
+                        and item.get("instrument_token") is not None
+                    ),
+                    None,
+                )
+                if nifty_index:
+                    spot_token = int(nifty_index["instrument_token"])
+                    print(
+                        "Resolved NIFTY 50 index token automatically:",
+                        spot_token,
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "NIFTY 50 index token not found in Kite NSE instruments; "
+                        "spot REST fallback will be used. Set NIFTY_INSTRUMENT_TOKEN "
+                        "if index history is unavailable.",
+                        flush=True,
+                    )
+            except Exception as exc:
+                print(
+                    f"Could not auto-resolve NIFTY 50 index token: {type(exc).__name__}: {exc}",
+                    flush=True,
+                )
         equity_tokens_by_symbol: dict[str, int] = {}
         equity_exchange_by_symbol: dict[str, str] = {}
         equity_news_aliases: dict[str, list[str]] = {}
