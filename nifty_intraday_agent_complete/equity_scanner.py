@@ -48,8 +48,10 @@ def _feature_row_snapshot(frame: pd.DataFrame) -> dict[str, float | None]:
     row = frame.iloc[-1]
     fields = (
         "open", "high", "low", "close", "volume", "ema9", "ema21",
-        "rsi14", "vwap", "atr14", "adx14", "relative_volume20",
-        "body_pct", "opening_range_high", "opening_range_low",
+        "ema9_slope", "ema21_slope", "rsi14", "vwap", "atr14", "atr_pct",
+        "adx14", "plus_di14", "minus_di14", "relative_volume20",
+        "body_pct", "close_location", "prior_day_high", "prior_day_low",
+        "opening_range_high", "opening_range_low",
     )
     return {
         field: float(row[field]) if field in row.index and pd.notna(row[field]) else None
@@ -103,7 +105,8 @@ def build_equity_buy_signal(
         premarket_context=premarket_context,
     )
     if analysis["signal"] != "CALL":
-        reject(f"Technical setup not bullish (engine returned {analysis['signal']})")
+        reason = str(analysis.get("reason") or "no qualifying bullish setup")
+        reject(f"Signal engine returned {analysis['signal']}: {reason}")
         return None
     relative_volume = analysis.get("relative_volume")
     if relative_volume is None or float(relative_volume) < quality.relative_volume_threshold:
@@ -168,10 +171,14 @@ def build_equity_buy_signal(
         "estimated holding time uses recent 1-minute price movement"
     )
     signal["feature_snapshot"] = {
-        "version": 1,
+        "version": 2,
         "symbol": symbol,
         "signal_candle_time": signal["signal_candle_time"],
         "entry_price": float(live_price),
+        "market_regime": analysis.get("market_regime"),
+        "technical_score": analysis.get("technical_score"),
+        "context_score": analysis.get("context_score"),
+        "total_score": analysis.get("total_score"),
         "news_bias": news_bias,
         "premarket_context": dict(analysis.get("premarket_context") or {}),
         "one_minute": _feature_row_snapshot(closed_minutes),

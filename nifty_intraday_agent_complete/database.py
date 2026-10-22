@@ -1,6 +1,7 @@
 import os
 import json
 import sqlite3
+import threading
 from datetime import date, datetime, timezone, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -292,28 +293,96 @@ def update_equity_scan_status(
     last_evaluated_at: str | None = None,
     rejection_reason: str | None = None,
 ) -> None:
+    fields = {
+        "instrument_token": instrument_token, "last_price": last_price,
+        "last_tick_at": last_tick_at, "one_minute_bars": one_minute_bars,
+        "five_minute_bars": five_minute_bars,
+        "last_evaluated_at": last_evaluated_at,
+        "rejection_reason": rejection_reason,
+    }
     with connect() as conn:
-        # An explicit NULL bypasses column defaults, so create the row first.
-        conn.execute(
-            "INSERT OR IGNORE INTO equity_scan_status (symbol, updated_at) VALUES (?,?)",
-            (symbol, utc_now()),
-        )
-        conn.execute("""
-        UPDATE equity_scan_status SET
-          instrument_token=COALESCE(?,instrument_token),
-          last_price=COALESCE(?,last_price),
-          last_tick_at=COALESCE(?,last_tick_at),
-          one_minute_bars=COALESCE(?,one_minute_bars),
-          five_minute_bars=COALESCE(?,five_minute_bars),
-          last_evaluated_at=COALESCE(?,last_evaluated_at),
-          rejection_reason=COALESCE(?,rejection_reason),
-          updated_at=?
-        WHERE symbol=?
-        """, (
-            instrument_token, last_price, last_tick_at, one_minute_bars,
-            five_minute_bars, last_evaluated_at, rejection_reason,
-            utc_now(), symbol,
-        ))
+        _write_equity_scan_status(conn, symbol, fields)
+
+
+def _write_equity_scan_status(
+    conn: sqlite3.Connection, symbol: str, fields: dict[str, Any]
+) -> None:
+    now = utc_now()
+    # An explicit NULL bypasses column defaults, so create the row first.
+    conn.execute(
+        "INSERT OR IGNORE INTO equity_scan_status (symbol, updated_at) VALUES (?,?)",
+        (symbol, now),
+    )
+    conn.execute("""
+    UPDATE equity_scan_status SET
+      instrument_token=COALESCE(?,instrument_token),
+      last_price=COALESCE(?,last_price),
+      last_tick_at=COALESCE(?,last_tick_at),
+      one_minute_bars=COALESCE(?,one_minute_bars),
+      five_minute_bars=COALESCE(?,five_minute_bars),
+      last_evaluated_at=COALESCE(?,last_evaluated_at),
+      rejection_reason=COALESCE(?,rejection_reason),
+      updated_at=?
+    WHERE symbol=?
+    """, (
+        fields.get("instrument_token"), fields.get("last_price"),
+        fields.get("last_tick_at"), fields.get("one_minute_bars"),
+        fields.get("five_minute_bars"), fields.get("last_evaluated_at"),
+        fields.get("rejection_reason"), now, symbol,
+    ))
+
+
+_pending_equity_status: dict[str, dict[str, Any]] = {}
+_pending_equity_status_lock = threading.Lock()
+
+
+def queue_equity_scan_status(
+    symbol: str,
+    instrument_token: int | None = None,
+    last_price: float | None = None,
+    last_tick_at: str | None = None,
+    one_minute_bars: int | None = None,
+    five_minute_bars: int | None = None,
+    last_evaluated_at: str | None = None,
+    rejection_reason: str | None = None,
+) -> None:
+    """Buffer a status update; flush_equity_scan_status writes all in one transaction.
+
+    A per-tick SQLite commit costs tens of milliseconds, far more than a
+    300-symbol live feed can afford. Later non-null values overwrite earlier ones.
+    """
+    fields = {
+        "instrument_token": instrument_token, "last_price": last_price,
+        "last_tick_at": last_tick_at, "one_minute_bars": one_minute_bars,
+        "five_minute_bars": five_minute_bars,
+        "last_evaluated_at": last_evaluated_at,
+        "rejection_reason": rejection_reason,
+    }
+    with _pending_equity_status_lock:
+        pending = _pending_equity_status.setdefault(symbol, {})
+        pending.update({k: v for k, v in fields.items() if v is not None})
+
+
+def flush_equity_scan_status() -> int:
+    with _pending_equity_status_lock:
+        batch = dict(_pending_equity_status)
+        _pending_equity_status.clear()
+    if not batch:
+        return 0
+    try:
+        with connect() as conn:
+            for symbol, fields in batch.items():
+                _write_equity_scan_status(conn, symbol, fields)
+    except Exception:
+        # Re-queue without clobbering any newer values that arrived meanwhile.
+        with _pending_equity_status_lock:
+            for symbol, fields in batch.items():
+                _pending_equity_status.setdefault(symbol, {}).update(
+                    {k: v for k, v in fields.items()
+                     if k not in _pending_equity_status.get(symbol, {})}
+                )
+        raise
+    return len(batch)
 
 
 def list_equity_scan_status(limit: int = 200) -> list[dict[str, Any]]:

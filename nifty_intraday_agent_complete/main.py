@@ -19,7 +19,9 @@ from database import (
     expire_stale_equity_signals, list_equity_signals_by_status,
     resolve_equity_signal_at_price,
     update_analysis_status, utc_now, insert_premarket_snapshot,
-    update_equity_scan_status, update_kite_auth_status
+    # Buffered: flushed in one transaction by the equity-status-flush thread.
+    queue_equity_scan_status as update_equity_scan_status,
+    flush_equity_scan_status, update_kite_auth_status
 )
 from news_sources import (
     aggregate_news,
@@ -553,7 +555,10 @@ def main() -> None:
         if spot_token is not None and spot_token != instrument_token:
             subscribed_tokens.append(spot_token)
         subscribed_tokens.extend(equity_tokens_by_symbol.values())
-        broker.set_instrument_tokens(subscribed_tokens)
+        broker.set_instrument_tokens(
+            subscribed_tokens,
+            full_mode_tokens=[t for t in subscribed_tokens if t not in equity_symbol_by_token],
+        )
         update_market_status(
             "STARTING", signal_instrument="NIFTY spot index",
             analysis_state="WARMING_UP",
@@ -614,7 +619,8 @@ def main() -> None:
                         )
                         print(f"Equity warm-up: {symbol} returned no historical candles", flush=True)
                         continue
-                    equity_frames = equity_engines[symbol].load_history(equity_history)
+                    with equity_engine_locks[symbol]:
+                        equity_frames = equity_engines[symbol].load_history(equity_history)
                     historical_equity_rows: list[CandleRecord] = []
                     for timeframe, frame in equity_frames.items():
                         historical_equity_rows.extend(
@@ -1314,6 +1320,18 @@ def main() -> None:
         target=equity_tick_worker, name="equity-tick-worker", daemon=True
     ).start()
 
+    def equity_status_flusher() -> None:
+        while True:
+            time.sleep(2)
+            try:
+                flush_equity_scan_status()
+            except Exception as exc:
+                print(f"Equity status flush failed: {type(exc).__name__}: {exc}", flush=True)
+
+    threading.Thread(
+        target=equity_status_flusher, name="equity-status-flush", daemon=True
+    ).start()
+
     def on_ticks(ticks: Sequence[Tick]) -> None:
         nifty_ticks: list[Tick] = []
         equity_ticks: list[Tick] = []
@@ -1415,42 +1433,7 @@ def main() -> None:
         daemon=True,
     ).start()
 
-    equity_history_end = pd.Timestamp.now(tz=settings.market_timezone).to_pydatetime()
-    equity_history_start = equity_history_end - timedelta(days=5)
-    for equity_index, (symbol, token) in enumerate(equity_tokens_by_symbol.items()):
-        if equity_index:
-            time.sleep(0.4)
-        try:
-            equity_history: list[dict[str, Any]] = broker.historical_data(
-                token, equity_history_start, equity_history_end, "minute"
-            )
-            if not equity_history:
-                print(f"No historical candles for {symbol}; waiting for live warm-up")
-                continue
-            equity_engine = equity_engines[symbol]
-            with equity_engine_locks[symbol]:
-                equity_frames: CandleFrames = equity_engine.load_history(equity_history)
-                current_five_bucket = pd.Timestamp.now(
-                    tz=settings.market_timezone
-                ).floor("5min")
-                closed_five_history = equity_frames["5min"].loc[
-                    equity_frames["5min"].index < current_five_bucket
-                ]
-                equity_history_rows = equity_candle_records(
-                    symbol, "1min", equity_frames["1min"]
-                ) + equity_candle_records(symbol, "5min", closed_five_history)
-                if not closed_five_history.empty:
-                    last_equity_persisted_five_minute[symbol] = cast(
-                        pd.Timestamp, closed_five_history.index[-1]
-                    )
-            insert_equity_candles(equity_history_rows)
-            print(
-                f"Equity warm-up {symbol}: {len(equity_frames['1min'])} 1m bars, "
-                f"{len(equity_frames['5min'])} 5m bars"
-            )
-        except Exception as exc:
-            print(f"Equity history warm-up failed for {symbol}: {exc}")
-
+    # Equity history is warmed once, by the background warm_equity_history thread.
     while True:
         market_now = datetime.now(ZoneInfo(settings.market_timezone))
         close_time = market_now.replace(hour=15, minute=30, second=0, microsecond=0)

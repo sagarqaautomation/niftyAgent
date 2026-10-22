@@ -1,4 +1,5 @@
 import calendar
+import functools
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Mapping, Sequence
@@ -172,6 +173,7 @@ def classify_categories(text: str) -> list[str]:
     ]
 
 
+@functools.lru_cache(maxsize=None)
 def _alias_pattern(alias: str) -> re.Pattern[str] | None:
     normalized = re.sub(r"\s+", " ", alias.strip())
     normalized = re.sub(r"\s+(?:limited|ltd\.?|private|pvt\.?|company)$", "", normalized, flags=re.IGNORECASE)

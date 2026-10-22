@@ -46,6 +46,7 @@ class KiteMarketData:
         self.callback: TickCallback | None = None
         self.status_callback: StatusCallback | None = None
         self.instrument_tokens: list[int] = []
+        self.full_mode_tokens: list[int] = []
         self.http_lock = RLock()
 
     def connect(self) -> "KiteMarketData":
@@ -97,7 +98,12 @@ class KiteMarketData:
         def on_connect(ws: Any, _response: Any) -> None:
             if self.instrument_tokens:
                 ws.subscribe(self.instrument_tokens)
-                ws.set_mode(ws.MODE_FULL, self.instrument_tokens)
+                full = set(self.full_mode_tokens)
+                quote_only = [t for t in self.instrument_tokens if t not in full]
+                if quote_only:
+                    ws.set_mode(ws.MODE_QUOTE, quote_only)
+                if full:
+                    ws.set_mode(ws.MODE_FULL, [t for t in self.instrument_tokens if t in full])
                 if settings.nifty_instrument_token:
                     ws.set_mode(ws.MODE_LTP, [int(settings.nifty_instrument_token)])
             print(
@@ -195,8 +201,18 @@ class KiteMarketData:
             result = self.kite.quote(list(instruments))
         return cast(dict[str, dict[str, Any]], result)
 
-    def set_instrument_tokens(self, instrument_tokens: Sequence[int]) -> None:
+    def set_instrument_tokens(
+        self,
+        instrument_tokens: Sequence[int],
+        full_mode_tokens: Sequence[int] | None = None,
+    ) -> None:
         self.instrument_tokens = list(dict.fromkeys(int(token) for token in instrument_tokens))
+        # Tokens outside this set use the smaller QUOTE packets (price+volume,
+        # no market depth), which keeps a large watchlist cheap to parse.
+        self.full_mode_tokens = (
+            list(dict.fromkeys(int(token) for token in full_mode_tokens))
+            if full_mode_tokens is not None else list(self.instrument_tokens)
+        )
 
     def get_front_future(self, name: str = "NIFTY") -> dict[str, Any]:
         instruments = self.get_instruments("NFO")

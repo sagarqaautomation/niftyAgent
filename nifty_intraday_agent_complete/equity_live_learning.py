@@ -38,6 +38,9 @@ def _record(row_id: int, created_at: str, symbol: str, status: str,
         return None
     if not isinstance(snapshot, dict):
         return None
+    snapshot_version = snapshot.get("version")
+    if not isinstance(snapshot_version, int) or snapshot_version < 2:
+        return None
     minute = snapshot.get("one_minute") or {}
     if not isinstance(minute, dict):
         minute = {}
