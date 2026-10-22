@@ -1,3 +1,4 @@
+import queue
 import time
 import threading
 from collections.abc import Mapping, Sequence
@@ -8,9 +9,10 @@ from zoneinfo import ZoneInfo
 
 from config import settings
 from accuracy_config import quality_settings as quality
+from failure_guard import failure_guard_reason
 from market_hours import is_current_session_candle, is_market_open
 from database import (
-    init_db, insert_news, insert_candles, insert_spot_candles, insert_signal,
+    init_db, insert_news, insert_candles, insert_spot_candles, insert_signal, list_signals,
     performance, resolve_with_bar, expire_signals, update_market_status,
     update_spot_status, insert_equity_signal, insert_equity_candles,
     resolve_equity_signal,
@@ -567,7 +569,7 @@ def main() -> None:
         raise
 
     equity_engines: dict[str, Any] = {
-        symbol: CandleEngine() for symbol in equity_tokens_by_symbol
+        symbol: CandleEngine(refresh_on_rollover_only=True) for symbol in equity_tokens_by_symbol
     }
     equity_engine_locks = {
         symbol: threading.RLock() for symbol in equity_tokens_by_symbol
@@ -810,7 +812,7 @@ def main() -> None:
                 update_spot_status(latest_spot_price, latest_spot_time)
                 last_spot_status_write = now
 
-    def on_ticks(ticks: Sequence[Tick]) -> None:
+    def process_ticks(ticks: Sequence[Tick]) -> None:
         nonlocal news_bias, last_status_write, last_processed_minute
         nonlocal last_spot_status_write
         nonlocal last_cumulative_volume, last_volume_date
@@ -1223,6 +1225,19 @@ def main() -> None:
                             )
                             continue
 
+                        guard_reason = failure_guard_reason(
+                            direction,
+                            closed_timestamp.to_pydatetime(),
+                            result.get("feature_snapshot") or {},
+                            list_signals(10),
+                        )
+                        if guard_reason:
+                            update_analysis_status(
+                                "BLOCKED", result.get("technical_score"), guard_reason
+                            )
+                            print(f"[FAILURE GUARD] {direction} blocked: {guard_reason}", flush=True)
+                            continue
+
                         if latest_spot_price is None or latest_spot_time is None:
                             update_analysis_status(
                                 "BLOCKED", None,
@@ -1278,6 +1293,40 @@ def main() -> None:
                             )
                         last_alert_direction, last_alert_bar = direction, closed_timestamp
                         print("SIGNAL:", signal)
+
+    # The WebSocket reactor thread must never block, or NIFTY ticks go stale.
+    # NIFTY futures/spot ticks are handled inline; the heavy 300-symbol equity
+    # scan runs on its own worker thread fed by a bounded queue.
+    equity_tick_queue: queue.Queue[Sequence[Tick]] = queue.Queue(maxsize=200)
+
+    def equity_tick_worker() -> None:
+        while True:
+            batch = equity_tick_queue.get()
+            try:
+                process_ticks(batch)
+            except Exception as exc:
+                print(f"Equity tick worker error: {type(exc).__name__}: {exc}", flush=True)
+
+    threading.Thread(
+        target=equity_tick_worker, name="equity-tick-worker", daemon=True
+    ).start()
+
+    def on_ticks(ticks: Sequence[Tick]) -> None:
+        nifty_ticks: list[Tick] = []
+        equity_ticks: list[Tick] = []
+        for tick in ticks:
+            token = tick.get("instrument_token")
+            if token is not None and int(token) in equity_symbol_by_token:
+                equity_ticks.append(tick)
+            else:
+                nifty_ticks.append(tick)
+        if equity_ticks:
+            try:
+                equity_tick_queue.put_nowait(equity_ticks)
+            except queue.Full:
+                pass  # Drop stale equity ticks rather than delay the NIFTY feed.
+        if nifty_ticks:
+            process_ticks(nifty_ticks)
 
     broker.on_status(on_status)
     broker.on_tick(on_ticks)

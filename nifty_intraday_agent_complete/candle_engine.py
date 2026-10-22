@@ -18,7 +18,10 @@ class CandleEngine:
 
     _OHLCV = ("open", "high", "low", "close", "volume")
 
-    def __init__(self, max_rows: int = 500) -> None:
+    def __init__(self, max_rows: int = 500, refresh_on_rollover_only: bool = False) -> None:
+        # Recomputing every indicator on each tick is far too expensive for
+        # hundreds of symbols; scanners only need frames when a candle closes.
+        self.refresh_on_rollover_only = refresh_on_rollover_only
         empty_index = pd.DatetimeIndex(
             [], tz=settings.market_timezone, name="timestamp"
         )
@@ -121,7 +124,9 @@ class CandleEngine:
         tick_price = float(price)
         tick_volume = max(0.0, float(volume or 0.0))
 
+        rolled_over = False
         if self._active_minute is None:
+            rolled_over = True
             self._active_minute = minute_start
             self._active_bar = {
                 "open": tick_price,
@@ -140,6 +145,7 @@ class CandleEngine:
             self._active_bar["volume"] += tick_volume
         else:
             # Close the prior active candle and retain aggregated bars only.
+            rolled_over = True
             assert self._active_bar is not None
             closed = pd.DataFrame(
                 [self._active_bar],
@@ -159,5 +165,11 @@ class CandleEngine:
             }
 
         self._last_tick_timestamp = timestamp
+        if (
+            self.refresh_on_rollover_only
+            and not rolled_over
+            and not self.frames["1min"].empty
+        ):
+            return self.frames
         self._update_frames(self._frame_with_active_bar())
         return self.frames

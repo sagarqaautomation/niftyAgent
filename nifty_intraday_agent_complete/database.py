@@ -293,24 +293,26 @@ def update_equity_scan_status(
     rejection_reason: str | None = None,
 ) -> None:
     with connect() as conn:
+        # An explicit NULL bypasses column defaults, so create the row first.
+        conn.execute(
+            "INSERT OR IGNORE INTO equity_scan_status (symbol, updated_at) VALUES (?,?)",
+            (symbol, utc_now()),
+        )
         conn.execute("""
-        INSERT INTO equity_scan_status
-        (symbol,instrument_token,last_price,last_tick_at,one_minute_bars,
-         five_minute_bars,last_evaluated_at,rejection_reason,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(symbol) DO UPDATE SET
-          instrument_token=COALESCE(excluded.instrument_token,equity_scan_status.instrument_token),
-          last_price=COALESCE(excluded.last_price,equity_scan_status.last_price),
-          last_tick_at=COALESCE(excluded.last_tick_at,equity_scan_status.last_tick_at),
-          one_minute_bars=COALESCE(excluded.one_minute_bars,equity_scan_status.one_minute_bars),
-          five_minute_bars=COALESCE(excluded.five_minute_bars,equity_scan_status.five_minute_bars),
-          last_evaluated_at=COALESCE(excluded.last_evaluated_at,equity_scan_status.last_evaluated_at),
-          rejection_reason=COALESCE(excluded.rejection_reason,equity_scan_status.rejection_reason,'Waiting for evaluation'),
-          updated_at=excluded.updated_at
+        UPDATE equity_scan_status SET
+          instrument_token=COALESCE(?,instrument_token),
+          last_price=COALESCE(?,last_price),
+          last_tick_at=COALESCE(?,last_tick_at),
+          one_minute_bars=COALESCE(?,one_minute_bars),
+          five_minute_bars=COALESCE(?,five_minute_bars),
+          last_evaluated_at=COALESCE(?,last_evaluated_at),
+          rejection_reason=COALESCE(?,rejection_reason),
+          updated_at=?
+        WHERE symbol=?
         """, (
-            symbol, instrument_token, last_price, last_tick_at, one_minute_bars,
+            instrument_token, last_price, last_tick_at, one_minute_bars,
             five_minute_bars, last_evaluated_at, rejection_reason,
-            utc_now(),
+            utc_now(), symbol,
         ))
 
 

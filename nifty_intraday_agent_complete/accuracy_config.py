@@ -42,6 +42,15 @@ class QualitySettings:
 
     # Experimental strict filter. Keep disabled by default until it proves
     # an out-of-sample improvement in walk-forward validation.
+    # Guards learned from analysed failed signals (see failure_guard.py).
+    failure_guard_enabled: bool = _bool("FAILURE_GUARD_ENABLED", True)
+    guard_earliest_signal_minute: int = _int("GUARD_EARLIEST_SIGNAL_MINUTE", 9 * 60 + 45)
+    guard_max_five_min_adx: float = _float("GUARD_MAX_FIVE_MIN_ADX", 40.0)
+    guard_call_max_rsi: float = _float("GUARD_CALL_MAX_RSI", 80.0)
+    guard_put_min_rsi: float = _float("GUARD_PUT_MIN_RSI", 20.0)
+    guard_put_min_five_min_rsi: float = _float("GUARD_PUT_MIN_FIVE_MIN_RSI", 15.0)
+    guard_loss_streak_minutes: int = _int("GUARD_LOSS_STREAK_MINUTES", 30)
+
     precision_mode: bool = _bool("PRECISION_MODE", False)
     precision_min_score: int = _int("PRECISION_MIN_SCORE", 8)
     precision_min_adx: float = _float("PRECISION_MIN_ADX", 25.0)

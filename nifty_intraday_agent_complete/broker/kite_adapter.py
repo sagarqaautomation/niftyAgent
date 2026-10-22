@@ -88,7 +88,11 @@ class KiteMarketData:
 
         def on_ticks(_ws: Any, ticks: Sequence[Tick]) -> None:
             if self.callback:
-                self.callback(ticks)
+                try:
+                    self.callback(ticks)
+                except Exception as exc:
+                    # An uncaught error here makes Twisted drop the WebSocket.
+                    print(f"Tick handler error: {type(exc).__name__}: {exc}", flush=True)
 
         def on_connect(ws: Any, _response: Any) -> None:
             if self.instrument_tokens:
