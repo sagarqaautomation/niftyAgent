@@ -154,6 +154,13 @@ def build_equity_buy_signal(
         "atr": float(atr),
     })
     add_risk_levels(signal)
+    target_points = float(signal["target_price"]) - float(signal["entry_price"])
+    if target_points < quality.equity_min_target_points:
+        reject(
+            f"Target only {target_points:.2f} points above entry; "
+            f"minimum is {quality.equity_min_target_points:g}"
+        )
+        return None
     signal["signal"] = "BUY"
 
     average_move: float = closed_minutes["close"].diff().abs().tail(20).mean()

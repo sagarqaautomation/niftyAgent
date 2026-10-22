@@ -47,7 +47,7 @@ class EquityScannerTests(unittest.TestCase):
     def _analysis(self, relative_volume: float) -> dict[str, object]:
         return {
             "signal": "CALL",
-            "atr": 1.0,
+            "atr": 5.0,
             "technical_score": 7,
             "context_score": 0,
             "total_score": 7,
@@ -101,6 +101,25 @@ class EquityScannerTests(unittest.TestCase):
         self.assertEqual(snapshot["one_minute"]["adx14"], 21.0)
         self.assertEqual(snapshot["one_minute"]["relative_volume20"], 1.2)
         self.assertEqual(snapshot["one_minute"]["body_pct"], 0.55)
+
+    @patch("equity_scanner.detect_latest_candlestick_patterns")
+    @patch("equity_scanner.build_signal")
+    def test_target_closer_than_minimum_points_is_rejected(
+        self, build_signal_mock: MagicMock, patterns_mock: MagicMock
+    ) -> None:
+        patterns_mock.return_value = [{"name": "Hammer", "direction": "BULLISH"}]
+        build_signal_mock.return_value = {
+            **self._analysis(quality.relative_volume_threshold + 0.1),
+            "atr": 0.2,
+        }
+        diagnostics: dict[str, object] = {}
+
+        signal = build_equity_buy_signal(
+            "TEST", self._frames(), 102.0, diagnostics=diagnostics
+        )
+
+        self.assertIsNone(signal)
+        self.assertIn("Target only", str(diagnostics["reason"]))
 
     @patch("equity_scanner.detect_latest_candlestick_patterns")
     @patch("equity_scanner.build_signal")

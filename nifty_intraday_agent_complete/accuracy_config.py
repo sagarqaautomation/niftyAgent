@@ -27,6 +27,8 @@ class QualitySettings:
     relative_volume_threshold: float = _float("RELATIVE_VOLUME_THRESHOLD", 1.25)
     minimum_candle_strength: float = _float("MINIMUM_CANDLE_STRENGTH", 0.65)
     minimum_reward_risk: float = _float("MINIMUM_REWARD_RISK", 1.5)
+    # Equity BUY signals whose target is closer than this many rupees to entry are dropped.
+    equity_min_target_points: float = _float("EQUITY_MIN_TARGET_POINTS", 3.0)
     signal_cooldown_minutes: int = _int("SIGNAL_COOLDOWN_MINUTES", 5)
     setup_reset_bars: int = _int("SETUP_RESET_BARS", 3)
     # Targeted v2.1 loss-cluster hypothesis: transition regimes are the
