@@ -781,12 +781,15 @@ def main() -> None:
                     if spot_bar_time != last_resolved_spot_minute:
                         last_resolved_spot_minute = spot_bar_time
                         spot_bar = closed_spot.iloc[-1]
-                        resolve_with_bar({
-                            "open": spot_bar["open"],
-                            "high": spot_bar["high"],
-                            "low": spot_bar["low"],
-                            "close": spot_bar["close"],
-                        })
+                        resolve_with_bar(
+                            {
+                                "open": spot_bar["open"],
+                                "high": spot_bar["high"],
+                                "low": spot_bar["low"],
+                                "close": spot_bar["close"],
+                            },
+                            bar_timestamp=spot_bar_time.to_pydatetime(),
+                        )
                         expire_signals()
                         # Research-only online learning: fit a candidate only from
                         # resolved, point-in-time signal snapshots. This never changes

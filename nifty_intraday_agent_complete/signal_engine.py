@@ -402,7 +402,15 @@ def build_signal(
                 f"{quality.high_volatility_min_score}"
             )
 
-    total_score = technical_score + context_score
+    # Context is signed bullish/bearish evidence. Align it to the proposed
+    # trade direction so bearish context strengthens PUTs instead of lowering
+    # their displayed total score (and bullish context strengthens CALLs).
+    directional_context_score = (
+        context_score if direction == "CALL"
+        else -context_score if direction == "PUT"
+        else 0
+    )
+    total_score = technical_score + directional_context_score
     atr = _value(a, "atr14")
     vwap_distance_pct = ((close - vwap) / close * 100) if close and not pd.isna(vwap) else 0.0
     structure = "BULL_BREAKOUT" if structure_bull else "BEAR_BREAKDOWN" if structure_bear else "NONE"
