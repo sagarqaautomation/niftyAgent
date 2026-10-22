@@ -52,6 +52,10 @@ class QualitySettings:
     guard_put_min_rsi: float = _float("GUARD_PUT_MIN_RSI", 20.0)
     guard_put_min_five_min_rsi: float = _float("GUARD_PUT_MIN_FIVE_MIN_RSI", 15.0)
     guard_loss_streak_minutes: int = _int("GUARD_LOSS_STREAK_MINUTES", 30)
+    # Validated on 6 months of NIFTY replay (1,094 resolved signals): TRENDING
+    # signals won 50% / 46% on the first / last part of the data vs ~40% for
+    # RANGE and TRANSITION. VWAP-stretch and late-session rules did not hold up.
+    guard_require_trending_regime: bool = _bool("GUARD_REQUIRE_TRENDING_REGIME", True)
 
     precision_mode: bool = _bool("PRECISION_MODE", False)
     precision_min_score: int = _int("PRECISION_MIN_SCORE", 8)

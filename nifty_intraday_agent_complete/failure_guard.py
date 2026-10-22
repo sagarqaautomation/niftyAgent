@@ -5,6 +5,7 @@ Each rule maps to a recurring loss cluster found in resolved signals:
   * trend exhaustion: 5m ADX far above the trending band (late entries)
   * RSI extremes: chasing an already overbought/oversold move
   * loss streak: repeating the same direction right after a failed signal
+  * regime: only TRENDING setups were reliable in 6-month replay (see accuracy_config)
 """
 
 from collections.abc import Mapping, Sequence
@@ -37,6 +38,13 @@ def failure_guard_reason(
             "Opening-noise guard: earlier signals fired before "
             f"{settings.guard_earliest_signal_minute // 60:02d}:"
             f"{settings.guard_earliest_signal_minute % 60:02d} IST failed repeatedly."
+        )
+
+    regime = snapshot.get("market_regime")
+    if settings.guard_require_trending_regime and regime != "TRENDING":
+        return (
+            f"Regime guard: {regime or 'UNKNOWN'} market; only TRENDING setups "
+            "were reliable in 6-month replay."
         )
 
     one = snapshot.get("one_minute") or {}
