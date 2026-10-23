@@ -40,7 +40,7 @@ class NewsSourcesTests(unittest.TestCase):
             None,
         )
         self.assertEqual(
-            extract_analyst_recommendation("Analyst says Buy and another says Sell"),
+            extract_analyst_recommendation("Analyst says Buy and another analyst says Sell"),
             "MIXED",
         )
 
