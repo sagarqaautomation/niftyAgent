@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS equity_candles (
 CREATE TABLE IF NOT EXISTS news (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,
+    author TEXT,
     title TEXT NOT NULL,
     url TEXT,
     published_at TEXT,
