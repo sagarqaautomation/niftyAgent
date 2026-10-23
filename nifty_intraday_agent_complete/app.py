@@ -11,8 +11,9 @@ from config import settings
 from market_hours import is_market_open
 from database import (
     init_db, performance, latest_signal, list_signals, list_news, list_spot_candles,
-    get_market_status, list_equity_signals_by_status, equity_signal_performance,
-    list_recent_equity_patterns, list_equity_scan_status, list_equity_research_candidates,
+    get_market_status, list_equity_signals, list_equity_signals_by_status,
+    equity_signal_performance, list_recent_equity_patterns, list_equity_scan_status,
+    list_equity_research_candidates,
 )
 from indicators import detect_latest_candlestick_patterns
 
@@ -335,6 +336,75 @@ def render_patterns() -> None:
     st.caption("Pattern detections are informational and never decide whether an equity BUY is generated.")
 
 
+def render_equity_evidence(rows: list[dict[str, Any]]) -> None:
+    st.subheader("Signal Evidence Trail")
+    st.caption(
+        "Each record keeps the decision checks, market-data timestamps, and matched article links "
+        "available when the signal was created. Feed bylines are shown as supplied by the publisher."
+    )
+    rendered = 0
+    for row in rows:
+        try:
+            snapshot = json.loads(row.get("feature_snapshot_json") or "{}")
+        except (TypeError, ValueError):
+            snapshot = {}
+        audit = snapshot.get("audit_trail") or {}
+        research = snapshot.get("research") or {}
+        evidence = audit.get("source_evidence") or research.get("evidence") or []
+        checks = audit.get("checks") or []
+        if not audit and not evidence and not checks:
+            continue
+        rendered += 1
+        label = (
+            f"{row.get('symbol', 'Unknown')} · {row.get('status', 'UNKNOWN')} · "
+            f"{row.get('created_at', 'time unavailable')}"
+        )
+        with st.expander(label):
+            st.caption(
+                f"1-minute candles through {audit.get('one_minute_candles_as_of') or row.get('signal_candle_time') or 'unknown'} · "
+                f"5-minute candles through {audit.get('five_minute_candles_as_of') or 'unknown'} · "
+                f"live price as of {audit.get('price_as_of') or 'unknown'}"
+            )
+            if checks:
+                checks_df = pd.DataFrame(checks)
+                streamlit_ui.dataframe(checks_df, use_container_width=True, hide_index=True)
+            if evidence:
+                evidence_df = pd.DataFrame(evidence)
+                evidence_cols = [
+                    "evidence_type", "source", "author", "analyst_recommendation",
+                    "target_price", "target_upside_pct", "title", "published_at", "url",
+                ]
+                evidence_df = evidence_df[
+                    [column for column in evidence_cols if column in evidence_df.columns]
+                ].rename(columns={
+                    "evidence_type": "Evidence type",
+                    "source": "Publisher",
+                    "author": "Feed byline",
+                    "analyst_recommendation": "Call tag",
+                    "target_price": "Target price",
+                    "target_upside_pct": "Target upside %",
+                    "published_at": "Published",
+                    "title": "Article",
+                })
+                link_column = "url" if "url" in evidence_df.columns else None
+                if link_column:
+                    evidence_df = evidence_df.rename(columns={"url": "link"})
+                streamlit_ui.dataframe(
+                    evidence_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "link": streamlit_ui.column_config.LinkColumn(
+                            "Source link", display_text="Open"
+                        )
+                    } if link_column else None,
+                )
+            else:
+                st.info("No source article was attached to this signal snapshot.")
+    if not rendered:
+        st.info("New signals will show their decision checks and article evidence here.")
+
+
 @st.fragment(run_every=5)
 def render_equities() -> None:
     market_day = datetime.now(ZoneInfo(settings.market_timezone)).date()
@@ -534,34 +604,48 @@ def render_equities() -> None:
             "Supporting information only: patterns add at most one optional score point and never block or trigger a BUY."
         )
 
-        equity_performance = equity_signal_performance()
+        cost_bps = float(streamlit_ui.number_input(
+            "Illustrative all-in round-trip cost (basis points of entry value)",
+            min_value=0.0,
+            max_value=1000.0,
+            value=25.0,
+            step=5.0,
+            key="equity_round_trip_cost_bps",
+        ))
+        equity_performance = equity_signal_performance(cost_bps)
         accuracy = equity_performance["accuracy_percent"]
         summary_df = pd.DataFrame([
             {"Metric": "Open BUY setups", "Value": str(equity_performance["open_signals"])},
             {"Metric": "Target-hit signals", "Value": str(equity_performance["target_hits"])},
-            {"Metric": "Unique target-hit stocks", "Value": str(equity_performance["target_stocks"])},
             {"Metric": "Stop-loss signals", "Value": str(equity_performance["stop_hits"])},
-            {"Metric": "Unique stop-loss stocks", "Value": str(equity_performance["stop_stocks"])},
             {"Metric": "Ambiguous outcomes", "Value": str(equity_performance["ambiguous"])},
             {"Metric": "Expired signals", "Value": str(equity_performance["expired"])},
             {"Metric": "Resolved signals", "Value": str(equity_performance["resolved"])},
-            {"Metric": "Accuracy", "Value": f"{accuracy}%" if accuracy is not None else "N/A"},
+            {"Metric": "Gross target-hit rate", "Value": f"{accuracy}%" if accuracy is not None else "N/A"},
+            {"Metric": "Net profitable outcome rate", "Value": f"{equity_performance['net_win_rate_percent']}%" if equity_performance["net_win_rate_percent"] is not None else "N/A"},
+            {"Metric": "Average net return", "Value": f"{equity_performance['net_average_return_percent']}%" if equity_performance["net_average_return_percent"] is not None else "N/A"},
+            {"Metric": "Net expectancy", "Value": f"{equity_performance['net_expectancy_r']} R" if equity_performance["net_expectancy_r"] is not None else "N/A"},
+            {"Metric": "Net profit factor", "Value": str(equity_performance["net_profit_factor"]) if equity_performance["net_profit_factor"] is not None else "N/A"},
+            {"Metric": "Outcomes priced", "Value": str(equity_performance["priced_outcomes"])},
+            {"Metric": "Assumed round-trip cost", "Value": f"{cost_bps:.1f} bps"},
         ])
-        st.subheader("Equity Outcome Summary")
+        st.subheader("Forward Equity Outcome Summary")
         streamlit_ui.dataframe(summary_df, use_container_width=True, hide_index=True)
         st.caption(
-            "Outcome lists show this market day only; the summary retains all historical results."
+            "These are forward outcomes from live scanner signals, not a historical backtest. "
+            "The calculation assumes fills at target or stop levels and subtracts the selected round-trip cost "
+            "from entry notional; gaps through levels, liquidity, and broker-specific fees are not modeled."
         )
         st.caption(
-            "Accuracy = target-hit signals / (target-hit + stop-loss signals); "
-            "ambiguous, expired, and open signals are excluded."
+            "Gross target-hit rate = target hits / (target hits + stop hits). "
+            "Ambiguous, expired, and open signals are excluded."
         )
+        render_equity_evidence(list_equity_signals(limit=25))
         st.caption(f"Watchlist: {settings.equity_watchlist_path}")
     else:
         st.info("Equity scanning is disabled. Set EQUITY_SCAN_ENABLED=true to enable it.")
 
 
-@st.fragment(run_every=60)
 @st.fragment(run_every=settings.news_refresh_seconds)
 def render_news() -> None:
     st.subheader("Recent News")
