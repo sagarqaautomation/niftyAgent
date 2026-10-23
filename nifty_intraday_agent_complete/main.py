@@ -1149,6 +1149,7 @@ def main() -> None:
                     ),
                     premarket_context=current_premarket_context,
                     diagnostics=scanner_diagnostic,
+                    live_price_time=equity_time.isoformat(),
                     research_provider=lambda px, _s=equity_symbol: build_equity_research(
                         _s,
                         news_items,
