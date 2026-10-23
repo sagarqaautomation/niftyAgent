@@ -87,6 +87,7 @@ def ensure_news_columns() -> None:
         "event_categories_json": "TEXT NOT NULL DEFAULT '[]'",
         "symbols_json": "TEXT NOT NULL DEFAULT '[]'",
         "published_epoch": "REAL",
+        "analyst_recommendation": "TEXT",
     }
     with connect() as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(news)")}
@@ -711,8 +712,8 @@ def insert_news(item: dict[str, Any]) -> None:
         conn.execute("""
         INSERT OR IGNORE INTO news
         (source,title,url,published_at,fetched_at,sentiment,market_bias,summary,
-         event_categories_json,symbols_json,published_epoch)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+         event_categories_json,symbols_json,published_epoch,analyst_recommendation)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(source,title) DO UPDATE SET
         url=excluded.url,
         published_at=COALESCE(excluded.published_at,news.published_at),
@@ -721,14 +722,15 @@ def insert_news(item: dict[str, Any]) -> None:
         summary=excluded.summary,
         event_categories_json=excluded.event_categories_json,
         symbols_json=excluded.symbols_json,
-        published_epoch=COALESCE(excluded.published_epoch,news.published_epoch)
+        published_epoch=COALESCE(excluded.published_epoch,news.published_epoch),
+        analyst_recommendation=COALESCE(excluded.analyst_recommendation,news.analyst_recommendation)
         """, (
             item["source"], item["title"], item.get("url"),
             item.get("published_at"), utc_now(), item.get("sentiment"),
             item.get("market_bias"), item.get("summary"),
             json.dumps(item.get("categories", []), ensure_ascii=True),
             json.dumps(item.get("symbols", []), ensure_ascii=True),
-            item.get("published_epoch"),
+            item.get("published_epoch"), item.get("analyst_recommendation"),
         ))
 
 def insert_signal(s: dict[str, Any]) -> int:
