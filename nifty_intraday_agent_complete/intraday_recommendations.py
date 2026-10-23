@@ -179,7 +179,8 @@ def collect_intraday_recommendations(
             continue
         has_buy, has_sell = bool(_BUY.search(body)), bool(_SELL.search(body))
         side = "MIXED" if has_buy and has_sell else "BUY" if has_buy else "SELL" if has_sell else "UNSPECIFIED"
-        brokerage = next((canonical for canonical, aliases in BROKER_ALIASES.items()\n                          if any(alias.casefold() in body.casefold() for alias in aliases)), "")
+        brokerage = next((canonical for canonical, aliases in BROKER_ALIASES.items()
+                          if any(alias.casefold() in body.casefold() for alias in aliases)), "")
         publisher = item.get("publisher") or urlparse(item.get("url", "")).hostname or "Google News result"
         for symbol in matches:
             key = (symbol, item.get("url", ""))
