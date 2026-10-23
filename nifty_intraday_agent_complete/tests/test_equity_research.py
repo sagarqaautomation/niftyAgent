@@ -6,8 +6,10 @@ from equity_research import assess_analysts, assess_fundamentals, assess_news, b
 
 def _item(title: str, sentiment: int, categories: list[str]) -> dict[str, object]:
     return {
-        "title": title, "summary": "", "source": "T", "sentiment": sentiment,
-        "categories": categories, "published_epoch": time.time() - 600, "symbols": [],
+        "title": title, "summary": "", "source": "T", "author": "Research Desk",
+        "url": "https://example.test/article", "sentiment": sentiment,
+        "categories": categories, "published_at": "2026-10-23T10:00:00+05:30",
+        "published_epoch": time.time() - 600, "symbols": [],
     }
 
 
@@ -29,6 +31,35 @@ class EquityResearchTests(unittest.TestCase):
     def test_downgrade_is_negative(self) -> None:
         items = [_item("Infosys downgrade by brokerage, target price Rs 1,400", 0, ["ANALYST_ACTION"])]
         self.assertLess(assess_analysts(items, "INFY", ["Infosys"], 1500.0)["score"], 0)
+
+    def test_analyst_evidence_keeps_article_link_author_and_call(self) -> None:
+        item = _item(
+            "Infosys buy rating, target price Rs 1,650",
+            1,
+            ["ANALYST_ACTION"],
+        )
+        item["analyst_recommendation"] = "BUY"
+        result = assess_analysts([item], "INFY", ["Infosys"], 1500.0)
+        evidence = result["evidence"][0]
+        self.assertEqual(evidence["source"], "T")
+        self.assertEqual(evidence["author"], "Research Desk")
+        self.assertEqual(evidence["url"], "https://example.test/article")
+        self.assertEqual(evidence["analyst_recommendation"], "BUY")
+        self.assertEqual(evidence["target_price"], 1650.0)
+
+    def test_conflicting_analyst_calls_are_not_scored_as_bullish(self) -> None:
+        item = _item("Infosys analyst view is mixed", 1, ["ANALYST_ACTION"])
+        item["analyst_recommendation"] = "MIXED"
+        result = assess_analysts([item], "INFY", ["Infosys"], 1500.0)
+        self.assertEqual(result["positive_calls"], 1)
+        self.assertEqual(result["negative_calls"], 1)
+        self.assertEqual(result["score"], 0)
+
+    def test_duplicate_analyst_headline_counts_once(self) -> None:
+        first = _item("Infosys buy rating", 1, ["ANALYST_ACTION"])
+        second = dict(first, source="Another Publisher")
+        result = assess_analysts([first, second], "INFY", ["Infosys"], 1500.0)
+        self.assertEqual(result["positive_calls"], 1)
 
     def test_fundamentals(self) -> None:
         good = {"revenueGrowth": 0.2, "earningsGrowth": 0.2, "profitMargins": 0.15,
