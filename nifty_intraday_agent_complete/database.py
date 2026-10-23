@@ -1062,11 +1062,25 @@ def list_equity_signals_by_status(
         rows = conn.execute(query, parameters).fetchall()
         return [dict(row) for row in rows]
 
-def equity_signal_performance() -> dict[str, int | float | None]:
+def equity_signal_performance(round_trip_cost_bps: float = 25.0) -> dict[str, int | float | None]:
+    """Summarize forward signal outcomes using idealized target/stop fills.
+
+    Cost is an all-in round-trip percentage of entry notional, expressed in bps.
+    This is not a historical backtest or a broker-specific fee quote.
+    """
+    cost_bps = float(round_trip_cost_bps)
+    if not 0 <= cost_bps <= 1000:
+        raise ValueError("round_trip_cost_bps must be between 0 and 1000")
+
     with connect() as conn:
         rows = conn.execute("""
         SELECT status, COUNT(*), COUNT(DISTINCT symbol)
         FROM equity_signals GROUP BY status
+        """).fetchall()
+        resolved_rows = conn.execute("""
+        SELECT status, entry_price, target_price, stop_loss
+        FROM equity_signals
+        WHERE status IN ('TARGET_HIT','STOP_HIT')
         """).fetchall()
 
     counts = {
@@ -1077,6 +1091,31 @@ def equity_signal_performance() -> dict[str, int | float | None]:
     stop_hits, stop_stocks = counts.get("STOP_HIT", (0, 0))
     resolved = target_hits + stop_hits
     accuracy = round(target_hits / resolved * 100, 2) if resolved else None
+
+    gross_returns: list[float] = []
+    net_returns: list[float] = []
+    gross_r: list[float] = []
+    net_r: list[float] = []
+    for status, entry, target, stop in resolved_rows:
+        if not entry or not target or not stop or entry <= 0 or entry <= stop:
+            continue
+        exit_price = float(target if status == "TARGET_HIT" else stop)
+        entry_price = float(entry)
+        risk_per_share = entry_price - float(stop)
+        gross_return_pct = (exit_price / entry_price - 1.0) * 100.0
+        net_return_pct = gross_return_pct - cost_bps / 100.0
+        gross_returns.append(gross_return_pct)
+        net_returns.append(net_return_pct)
+        gross_r.append((exit_price - entry_price) / risk_per_share)
+        net_r.append((exit_price - entry_price - entry_price * cost_bps / 10000.0) / risk_per_share)
+
+    net_gains = sum(value for value in net_returns if value > 0)
+    net_losses = -sum(value for value in net_returns if value < 0)
+    profit_factor = round(net_gains / net_losses, 3) if net_losses else None
+    net_win_rate = (
+        round(sum(value > 0 for value in net_returns) / len(net_returns) * 100, 2)
+        if net_returns else None
+    )
     return {
         "open_signals": counts.get("OPEN", (0, 0))[0],
         "target_hits": target_hits,
@@ -1087,6 +1126,15 @@ def equity_signal_performance() -> dict[str, int | float | None]:
         "expired": counts.get("EXPIRED", (0, 0))[0],
         "resolved": resolved,
         "accuracy_percent": accuracy,
+        "cost_bps": cost_bps,
+        "priced_outcomes": len(net_returns),
+        "gross_win_rate_percent": accuracy,
+        "net_win_rate_percent": net_win_rate,
+        "gross_average_return_percent": round(sum(gross_returns) / len(gross_returns), 3) if gross_returns else None,
+        "net_average_return_percent": round(sum(net_returns) / len(net_returns), 3) if net_returns else None,
+        "gross_expectancy_r": round(sum(gross_r) / len(gross_r), 3) if gross_r else None,
+        "net_expectancy_r": round(sum(net_r) / len(net_r), 3) if net_r else None,
+        "net_profit_factor": profit_factor,
     }
 
 def list_news(limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
