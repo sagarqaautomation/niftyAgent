@@ -39,6 +39,24 @@ def _relevant(item: Mapping[str, Any], symbol: str, aliases: Sequence[str]) -> b
     )
 
 
+def _evidence_record(
+    item: Mapping[str, Any], symbol: str, evidence_type: str,
+    recommendation: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "symbol": symbol.upper(),
+        "evidence_type": evidence_type,
+        "source": item.get("source"),
+        "author": item.get("author"),
+        "title": item.get("title"),
+        "url": item.get("url"),
+        "published_at": item.get("published_at"),
+        "published_epoch": item.get("published_epoch"),
+        "categories": list(item.get("categories", [])),
+        "analyst_recommendation": recommendation or item.get("analyst_recommendation"),
+    }
+
+
 def assess_news(
     items: Sequence[NewsItem], symbol: str, aliases: Sequence[str] = (),
     max_age_hours: float = 24, now: float | None = None,
@@ -48,6 +66,7 @@ def assess_news(
     seen: set[str] = set()
     score = 0.0
     headlines: list[str] = []
+    evidence: list[dict[str, Any]] = []
     for item in items:
         epoch = item.get("published_epoch")
         if epoch is None or not 0 <= current - float(epoch) <= max_age_hours * 3600:
@@ -60,12 +79,16 @@ def assess_news(
         if key in seen:
             continue
         seen.add(key)
+        evidence.append(_evidence_record(item, symbol, "company_news"))
         sentiment = float(item.get("sentiment", 0) or 0)
         score += sentiment
         if sentiment:
             headlines.append(str(item.get("title", "")))
     points = 2 if score >= 3 else 1 if score >= 1 else -2 if score <= -3 else -1 if score <= -1 else 0
-    return {"score": points, "raw_sentiment": score, "headlines": headlines[:5]}
+    return {
+        "score": points, "raw_sentiment": score, "headlines": headlines[:5],
+        "evidence": evidence[:10],
+    }
 
 
 def assess_analysts(
@@ -75,6 +98,8 @@ def assess_analysts(
     """Extract broker targets and ratings from analyst-action headlines."""
     current = now if now is not None else time.time()
     targets: list[dict[str, Any]] = []
+    evidence: list[dict[str, Any]] = []
+    seen: set[str] = set()
     positive = negative = 0
     for item in items:
         epoch = item.get("published_epoch")
@@ -85,34 +110,62 @@ def assess_analysts(
         if not _relevant(item, symbol, aliases):
             continue
         text = f"{item.get('title', '')} {item.get('summary', '')}"
-        if _NEGATIVE_RATING_RE.search(text):
-            negative += 1
-        elif _POSITIVE_RATING_RE.search(text):
+        article_key = re.sub(r"\W+", " ", str(item.get("title", "")).lower()).strip()
+        if article_key in seen:
+            continue
+        seen.add(article_key)
+
+        recommendation = str(item.get("analyst_recommendation") or "").upper()
+        if recommendation == "MIXED":
             positive += 1
+            negative += 1
+        elif recommendation == "SELL" or _NEGATIVE_RATING_RE.search(text):
+            negative += 1
+            recommendation = recommendation or "SELL"
+        elif recommendation == "BUY" or _POSITIVE_RATING_RE.search(text):
+            positive += 1
+            recommendation = recommendation or "BUY"
+        elif recommendation != "HOLD":
+            recommendation = ""
+
         match = _TARGET_RE.search(text)
+        target_value: float | None = None
         if match and price > 0:
             target = float(match.group(1).replace(",", ""))
             # Reject targets that cannot belong to this stock (parse noise).
             if 0.5 * price <= target <= 3 * price:
+                target_value = target
                 targets.append({
                     "source": item.get("source"),
+                    "author": item.get("author"),
                     "title": item.get("title"),
+                    "url": item.get("url"),
+                    "published_at": item.get("published_at"),
+                    "analyst_recommendation": recommendation or None,
                     "target": target,
                     "upside_pct": round((target / price - 1) * 100, 2),
                 })
+        evidence_item = _evidence_record(
+            item, symbol, "analyst_action", recommendation or None
+        )
+        if target_value is not None:
+            evidence_item["target_price"] = target_value
+            evidence_item["target_upside_pct"] = round((target_value / price - 1) * 100, 2)
+        evidence.append(evidence_item)
     avg_upside = sum(t["upside_pct"] for t in targets) / len(targets) if targets else None
     score = 0
     if negative > positive or (avg_upside is not None and avg_upside < 0):
         score = -2
-    elif positive:
+    elif positive > negative:
         score = 1
         if avg_upside is not None and avg_upside >= 10:
             score = 2
-    elif avg_upside is not None and avg_upside >= 10:
+    elif avg_upside is not None and avg_upside >= 10 and negative == 0:
         score = 1
     return {
         "score": score, "positive_calls": positive, "negative_calls": negative,
         "targets": targets[:5], "avg_target_upside_pct": avg_upside,
+        "evidence": evidence[:10],
     }
 
 
@@ -233,9 +286,19 @@ def build_research(
         verdict = "SUPPORTIVE"
     else:
         verdict = "INSUFFICIENT"
+    evidence_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for record in [*news.get("evidence", []), *analysts.get("evidence", [])]:
+        key_tuple = (
+            str(record.get("source") or ""),
+            str(record.get("title") or ""),
+            str(record.get("url") or ""),
+        )
+        evidence_by_key[key_tuple] = record
+
     return {
         "verdict": verdict, "score": total, "news": news,
         "analysts": analysts, "fundamentals": fund,
+        "evidence": list(evidence_by_key.values())[:15],
     }
 
 
