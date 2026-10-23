@@ -18,6 +18,8 @@ SOURCES = {
     "LiveMint": "https://www.livemint.com/rss/markets",
     "Economic Times": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
     "Business Standard": "https://www.business-standard.com/rss/markets-106.rss",
+    "CNBC TV18 Market": "https://www.cnbctv18.com/commonfeeds/v1/cne/rss/market.xml",
+    "CNBC TV18 Latest News": "https://www.cnbctv18.com/commonfeeds/v1/cne/rss/latest-news.xml",
     # Company-level feeds: results, orders, brokerage calls, buzzing stocks.
     "Moneycontrol Buzzing Stocks": "https://www.moneycontrol.com/rss/buzzingstocks.xml",
     "Economic Times Stocks": "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms",
@@ -169,6 +171,28 @@ def _published_epoch(entry: Any) -> float | None:
         return None
 
 
+def extract_analyst_recommendation(text: str) -> str | None:
+    """Extract explicit BUY/SELL/HOLD language; this is a headline heuristic."""
+    normalized = re.sub(r"\\s+", " ", (text or "").lower())
+    patterns = (
+        r"\\b(?:maintains?|reiterates?|reaffirms?)\\s+(?:a\\s+)?(buy|sell|hold)\\b",
+        r"\\b(?:upgrades?|downgrades?|cuts?|initiates?|starts?)\\b.{0,80}\\b(?:to|at|with)\\s+(buy|sell|hold)\\b",
+        r"\\b(buy|sell|hold)\\s+(?:rating|recommendation|call)\\b",
+        r"\\b(?:recommends?|recommended|recommending)\\b.{0,80}\\b(buy|sell|hold)\\b",
+        r"\\banalysts?\\b.{0,80}\\b(buy|sell|hold)\\b",
+    )
+    recommendations = {
+        match.upper()
+        for pattern in patterns
+        for match in re.findall(pattern, normalized)
+    }
+    if len(recommendations) == 1:
+        return recommendations.pop()
+    if len(recommendations) > 1:
+        return "MIXED"
+    return None
+
+
 def classify_categories(text: str) -> list[str]:
     normalized = (text or "").lower()
     return [
@@ -223,7 +247,9 @@ def fetch_feed(source: str, url: str, limit: int = 30) -> list[NewsItem]:
         summary = re.sub("<[^>]+>", " ", entry.get("summary", ""))
         score, bias = classify(title + " " + summary)
         published = entry.get("published") or entry.get("updated")
-        categories = classify_categories(f"{title} {summary}")
+        article_text = f"{title} {summary}"
+        categories = classify_categories(article_text)
+        analyst_recommendation = extract_analyst_recommendation(article_text)
         macro_categories = {"MARKET_MACRO", "GLOBAL_MACRO"}
         company_categories = {"EARNINGS", "COMPANY_ANNOUNCEMENT", "ANALYST_ACTION", "SECTOR"}
         if macro_categories.intersection(categories) and not company_categories.intersection(categories):
@@ -238,6 +264,7 @@ def fetch_feed(source: str, url: str, limit: int = 30) -> list[NewsItem]:
             "sentiment": score,
             "market_bias": bias,
             "categories": categories,
+            "analyst_recommendation": analyst_recommendation,
             "symbols": [],
         })
     return items
