@@ -179,7 +179,7 @@ def extract_analyst_recommendation(text: str) -> str | None:
         r"\b(?:upgrades?|downgrades?|cuts?|initiates?|starts?)\b.{0,80}\b(?:to|at|with)\s+(buy|sell|hold)\b",
         r"\b(buy|sell|hold)\s+(?:rating|recommendation|call)\b",
         r"\b(?:recommends?|recommended|recommending)\b.{0,80}\b(buy|sell|hold)\b",
-        r"\banalysts?\b.{0,80}\b(buy|sell|hold)\b",
+        r"\banalysts?\b.{0,80}?\b(buy|sell|hold)\b",
     )
     recommendations = {
         match.upper()
