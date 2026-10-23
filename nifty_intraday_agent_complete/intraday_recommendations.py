@@ -25,13 +25,24 @@ SEARCH_QUERIES = (
     '"intraday stocks to sell today" India',
     '"intraday stock picks" broker India today',
 )
-BROKER_NAMES = (
-    "Motilal Oswal", "ICICI Direct", "ICICI Securities", "HDFC Securities",
-    "Angel One", "Kotak Securities", "Sharekhan", "Axis Securities",
-    "SBI Securities", "JM Financial", "Nuvama", "LKP Securities",
-    "Geojit", "Samco Securities", "Aditya Trading Solutions",
-    "ATS Share Brokers", "IIFL Securities", "Nirmal Bang", "Zerodha",
-)
+BROKER_ALIASES = {
+    "Motilal Oswal": ("Motilal Oswal", "MOFSL"),
+    "ICICI Securities": ("ICICI Securities", "ICICI Direct"),
+    "HDFC Securities": ("HDFC Securities",),
+    "Angel One": ("Angel One",),
+    "Kotak Securities": ("Kotak Securities",),
+    "Sharekhan": ("Sharekhan",),
+    "Axis Securities": ("Axis Securities",),
+    "SBI Securities": ("SBI Securities",),
+    "JM Financial": ("JM Financial",),
+    "Nuvama": ("Nuvama",),
+    "LKP Securities": ("LKP Securities",),
+    "Geojit": ("Geojit",),
+    "Samco Securities": ("Samco Securities",),
+    "Aditya Trading Solutions": ("Aditya Trading Solutions", "ATS Share Brokers"),
+    "IIFL Securities": ("IIFL Securities",),
+    "Nirmal Bang": ("Nirmal Bang",),
+}
 _RECOMMENDATION_TERMS = re.compile(
     r"\bintraday\b|\bday[- ]trade\w*\b|\bstocks? to (?:buy|sell) today\b|"
     r"\bintraday (?:stock )?(?:calls?|picks?|recommendations?)\b",
@@ -168,7 +179,7 @@ def collect_intraday_recommendations(
             continue
         has_buy, has_sell = bool(_BUY.search(body)), bool(_SELL.search(body))
         side = "MIXED" if has_buy and has_sell else "BUY" if has_buy else "SELL" if has_sell else "UNSPECIFIED"
-        brokerage = next((name for name in BROKER_NAMES if name.casefold() in body.casefold()), "")
+        brokerage = next((canonical for canonical, aliases in BROKER_ALIASES.items()\n                          if any(alias.casefold() in body.casefold() for alias in aliases)), "")
         publisher = item.get("publisher") or urlparse(item.get("url", "")).hostname or "Google News result"
         for symbol in matches:
             key = (symbol, item.get("url", ""))
