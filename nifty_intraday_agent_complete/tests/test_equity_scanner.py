@@ -86,7 +86,8 @@ class EquityScannerTests(unittest.TestCase):
         }
 
         signal = build_equity_buy_signal(
-            "TEST", self._frames(), 102.0, premarket_context=context
+            "TEST", self._frames(), 102.0, premarket_context=context,
+            live_price_time="2026-01-05T09:17:00+05:30",
         )
 
         self.assertIsNotNone(signal)
@@ -96,7 +97,11 @@ class EquityScannerTests(unittest.TestCase):
             build_signal_mock.call_args.kwargs["premarket_context"], context
         )
         snapshot = signal["feature_snapshot"]
-        self.assertEqual(snapshot["version"], 2)
+        self.assertEqual(snapshot["version"], 3)
+        audit = snapshot["audit_trail"]
+        self.assertEqual(audit["price_as_of"], "2026-01-05T09:17:00+05:30")
+        self.assertEqual(audit["candlestick_patterns_are_gates"], False)
+        self.assertTrue(all(check["status"] == "PASS" for check in audit["checks"][:-1]))
         self.assertEqual(snapshot["market_regime"], "TRENDING")
         self.assertEqual(snapshot["one_minute"]["adx14"], 21.0)
         self.assertEqual(snapshot["one_minute"]["relative_volume20"], 1.2)
