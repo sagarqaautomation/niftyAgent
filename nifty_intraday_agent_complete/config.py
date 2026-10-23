@@ -23,7 +23,7 @@ class Settings:
     reward_risk: float = float(os.getenv("REWARD_RISK", "1.6"))
     signal_expiry_minutes: int = int(os.getenv("SIGNAL_EXPIRY_MINUTES", "30"))
     news_enabled: bool = env_bool("NEWS_ENABLED", True)
-    news_refresh_seconds: int = int(os.getenv("NEWS_REFRESH_SECONDS", "120"))
+    news_refresh_seconds: int = int(os.getenv("NEWS_REFRESH_SECONDS", "30"))
     kite_api_key: str = os.getenv("KITE_API_KEY", "")
     kite_api_secret: str = os.getenv("KITE_API_SECRET", "")
     kite_access_token: str = os.getenv("KITE_ACCESS_TOKEN", "")
@@ -31,9 +31,23 @@ class Settings:
     nifty_future_instrument_token: str = os.getenv("NIFTY_FUTURE_INSTRUMENT_TOKEN", "")
     kite_instruments_csv: str = os.getenv("KITE_INSTRUMENTS_CSV", "data/instruments.csv")
     equity_scan_enabled: bool = env_bool("EQUITY_SCAN_ENABLED", True)
+    # Legacy environment setting retained for compatibility; it no longer gates
+    # Kite technical scanning. News is optional context.
+    equity_news_first: bool = env_bool("EQUITY_NEWS_FIRST", False)
+    # Stocks outside the watchlist may be added after a positive company catalyst.
+    equity_discovery_enabled: bool = env_bool("EQUITY_DISCOVERY_ENABLED", True)
+    equity_discovery_max_additions: int = max(0, int(os.getenv("EQUITY_DISCOVERY_MAX_ADDITIONS", "40")))
     equity_watchlist_path: str = os.getenv(
         "EQUITY_WATCHLIST_PATH", "data/equity_watchlist.csv"
     )
+    nifty50_weights_path: str = os.getenv("NIFTY50_WEIGHTS_PATH", "data/nifty50_weights.csv")
+    premarket_enabled: bool = env_bool("PREMARKET_ENABLED", True)
+    premarket_refresh_seconds: int = max(60, int(os.getenv("PREMARKET_REFRESH_SECONDS", "300")))
+    premarket_gift_nifty_quote: str = os.getenv("PREMARKET_GIFT_NIFTY_QUOTE", "").strip()
+    premarket_news_max_age_minutes: int = max(1, int(os.getenv("PREMARKET_NEWS_MAX_AGE_MINUTES", "120")))
+    premarket_context_max_age_minutes: int = max(1, int(os.getenv("PREMARKET_CONTEXT_MAX_AGE_MINUTES", "15")))
+    # Optional offline-trained model; empty keeps live decisions unchanged.
+    trade_quality_model_path: str = os.getenv("TRADE_QUALITY_MODEL_PATH", "").strip()
     whatsapp_enabled: bool = env_bool("WHATSAPP_ENABLED", False)
     twilio_account_sid: str = os.getenv("TWILIO_ACCOUNT_SID", "")
     twilio_auth_token: str = os.getenv("TWILIO_AUTH_TOKEN", "")

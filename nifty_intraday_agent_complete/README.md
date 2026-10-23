@@ -14,7 +14,7 @@ A VS Code-ready Python project for a **research/alert-only** NIFTY intraday moni
 - Resolves signals against subsequent OHLC bars and records accuracy.
 - Persists per-equity 1-minute/5-minute candles and signal-time feature snapshots for replay and model research.
 - Exposes resolved equity outcomes with feature snapshots for offline training-data preparation; no AI model is trained or used yet.
-- Reads market-news RSS feeds such as Moneycontrol and LiveMint.
+- Reads multi-source market RSS headlines and tags matched equity/company context.
 - Sends optional WhatsApp alerts through Twilio.
 - Exposes REST endpoints for ChatGPT/other clients later.
 - Keeps automatic order placement disabled.
@@ -22,6 +22,14 @@ A VS Code-ready Python project for a **research/alert-only** NIFTY intraday moni
 > Important: This is an alert/research system, not a guaranteed prediction system and not an automatic trading bot. Always paper-test/backtest before using real money.
 
 ---
+
+- Captures best-effort pre-market context (GIFT Nifty when provider-supported, India VIX, global indices, market breadth and fresh news) into SQLite snapshots and signal-time feature records.
+
+## Pre-market intelligence
+
+When `LIVE_MARKET_DATA=true`, the worker refreshes pre-market context every five minutes by default. Configure `PREMARKET_GIFT_NIFTY_QUOTE` only if your Kite/provider account exposes a supported GIFT Nifty quote. The collector does not guess missing readings. India VIX is used as a volatility regime, not a direction signal; current-session breadth is not used before 09:15 IST.
+
+With the API running, inspect `/premarket/latest` or `/premarket/history?limit=50`. The context is stored alongside signal feature snapshots for later ML experiments, but it does not change CALL/PUT/WAIT decisions until validated with walk-forward testing.
 
 ## 1. Requirements
 
@@ -93,9 +101,23 @@ Put them in `.env`.
 
 The project deliberately does not hard-code credentials.
 
-### Authentication note
+### Browser-based Kite authentication
 
-Kite Connect uses a login/request-token flow. The exact daily authentication flow depends on your account/application setup. `broker/kite_adapter.py` contains the adapter boundary so authentication can be added without changing the signal engine.
+The API now provides a browser-based flow so you do not need to run a token-generation Python script or manually paste a new access token into `.env` each day:
+
+1. Set `KITE_API_KEY` and `KITE_API_SECRET` as private backend environment variables.
+2. In your Kite Connect developer console, set the app's registered redirect URL to the public HTTPS URL `https://YOUR-BACKEND-HOST/kite/callback` (replace the hostname with your deployed API URL). It must match the URL registered for your Kite app.
+3. Deploy the API on a persistent backend and open `https://YOUR-BACKEND-HOST/kite/login` in a browser.
+4. Complete Kite login and any required 2FA. The callback exchanges the one-time request token server-side and saves the access token to `data/kite_token.json`; the token is never returned by `/kite/auth/status`.
+5. Keep the `data/` directory on a private persistent volume. Do not commit the token file or expose it through static hosting.
+
+Useful endpoints:
+
+- `GET /kite/login` — redirects to official Kite login.
+- `GET /kite/callback` — receives the registered redirect and exchanges the one-time request token.
+- `GET /kite/auth/status` — reports whether a token is configured, without returning the token.
+
+Kite access tokens normally expire at 6:00 AM IST, so **the user must still complete Kite login/2FA again for a new session**. This flow automates request-token exchange and secure storage, not the broker's login or 2FA. A local-only API or GitHub Pages URL cannot serve as the public callback; the API needs a reachable HTTPS backend. After refreshing a token, restart/reconnect the market-data worker so it creates a new Kite WebSocket using the new session. Automatic order placement remains disabled.
 
 For live market data, the project expects a broker WebSocket adapter.
 
@@ -154,6 +176,9 @@ GET /performance
 GET /latest-signal
 GET /signals
 GET /news
+GET /kite/login
+GET /kite/callback
+GET /kite/auth/status
 ```
 
 Example:
@@ -294,20 +319,26 @@ Do not assume an option premium target can be derived safely from NIFTY points w
 
 ## 14. News
 
-Default RSS sources:
+RSS sources:
 
-- Moneycontrol market reports
-- LiveMint markets
+- [Moneycontrol market reports](https://www.moneycontrol.com/rss/marketreports.xml)
+- [LiveMint markets](https://www.livemint.com/rss/markets)
+- [Economic Times markets](https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms)
+- [Business Standard markets](https://www.business-standard.com/rss/markets-106.rss)
 
-News is treated as context, not as the sole trade trigger.
+Headlines are tagged heuristically as earnings, company announcements, analyst actions, sector news, or market/macro news. The worker matches headlines against broker-provided company names and trading symbols, then applies fresh company-specific and market/macro context to equity signals. The NIFTY signal continues to use market-wide news context.
 
 The code stores:
 - source
 - headline
 - URL
 - published time
-- simple sentiment
-- market bias
+- summary
+- simple sentiment and market bias
+- event categories
+- matched equity symbols
+
+The equity replay uses stored articles only at or after their recorded `fetched_at` time and within the configured freshness window. These feeds do not provide a complete six-month stock-specific news archive, so older candles without archived headlines remain neutral; live RSS headlines are never retroactively applied to earlier candles.
 
 Respect each source's terms, robots rules, RSS/API conditions and copyright restrictions. Do not scrape/copy full articles.
 
@@ -420,3 +451,206 @@ Show today's news bias.
 ```
 
 The ChatGPT layer should explain signals, not replace the deterministic market-data engine.
+
+
+## v2.1 historical NIFTY data download
+
+If you do not already have a 1-minute CSV, the project can download NIFTY 50 index candles directly through the same Kite Connect credentials used by the agent:
+
+```powershell
+python download_nifty_data.py --months 6
+```
+
+This creates:
+
+```text
+data/nifty_1m.csv
+```
+
+You can also specify an exact range:
+
+```powershell
+python download_nifty_data.py --start 2026-01-01 --end 2026-06-30
+```
+
+The downloader automatically splits requests into smaller chunks and throttles them. Kite's historical API supports minute candles and limits a single minute-data request to 60 calendar days, so the downloader does not request a larger window at once. The generated CSV is normalized to timestamp,open,high,low,close,volume, which is the format expected by backtester.py.
+
+### Important volume limitation
+
+NIFTY 50 itself is an index and does not have traded volume, so Kite returns zero volume for its historical index candles. That means the V2.1 relative-volume confirmation cannot be honestly validated from the NIFTY spot/index CSV alone. For a production-quality backtest, use a separate NIFTY futures volume series or run an explicitly price-only backtest; do not manufacture volume values.
+
+The downloader prints a warning when it detects this condition.
+
+### Recommended validation flow
+
+```powershell
+python download_nifty_data.py --months 6
+python backtester.py data/nifty_1m.csv --walk-forward --folds 5
+```
+
+The first run validates the price/structure engine. Before using the result to claim V2.1 accuracy, add a historical futures-volume source so the volume gate is evaluated with real data.
+
+### Equity signal-history download
+
+To download six calendar months of 1-minute candles for the distinct stock symbols that generated equity signals today, run from the project directory:
+
+    python download_equity_history.py --months 6
+
+The downloader uses the existing Kite credentials, requests at most 30 calendar days per chunk, and writes one file per symbol under `data/equity_history_6m/` plus a `manifest.json`. Existing files are skipped unless `--overwrite` is supplied. Check the manifest for missing instruments, empty histories, or API failures before using the files for analysis.
+
+Replay the live equity scanner across chronological validation folds with:
+
+    python equity_backtester.py --data-dir data/equity_history_6m --scores 7 8 9 --folds 4 --progress
+
+This writes `equity_backtest_summary.json` and `equity_backtest_trades.csv` in the data directory. Round-trip costs default to zero; supply a justified `--round-trip-cost-bps` value before interpreting net returns. The replay uses neutral historical news, enters at the next minute open, and excludes incomplete sessions and the first five warm-up dates.
+
+## v2.1 accuracy engine
+
+The v2.1 branch adds quality gates intended to reduce false positives before any live trading use:
+
+- 5-minute trend slope and ADX regime detection.
+- Relative-volume baseline that excludes the current candle.
+- Prior-day high/low and completed 15-minute opening-range structure.
+- Stronger range/high-volatility score requirements.
+- Point-in-time signal feature snapshots for later model research.
+- Time-aware news filtering so stale headlines do not drive intraday context.
+- Setup reset + cooldown logic instead of suppressing every repeated signal forever.
+- Risk-adjusted performance metrics: average R and profit factor.
+- A look-ahead-safe historical backtester with ambiguous-bar handling and walk-forward reporting.
+
+### Historical backtest
+
+Prepare a CSV with:
+
+    timestamp,open,high,low,close,volume
+    2026-01-05 09:15:00+05:30,25000,25010,24990,25005,12345
+    ...
+
+Run from the project directory:
+
+    python backtester.py data/nifty_1m.csv
+    python backtester.py data/nifty_1m.csv --walk-forward --folds 5
+    python backtester.py data/nifty_1m.csv --walk-forward --folds 5 --score-sweep 7 8 9 --round-trip-cost-points 2 --progress
+
+The evaluator generates the signal only after a closed candle and enters at the next 1-minute candle open. If both target and stop are touched inside one OHLC candle, it records AMBIGUOUS instead of assuming which one was hit first.
+
+The score sweep reports each fixed technical-score threshold separately on every validation fold. Round-trip costs are supplied in price points and default to zero; replace the example value with a realistic estimate for the instrument and execution method. Gross `average_r` and `profit_factor` remain available alongside `net_average_r` and `net_profit_factor`.
+
+Do not optimize parameters on the same period used for the final performance claim. Use the walk-forward validation output to judge whether improvements survive unseen periods.
+
+### Important live-data note
+
+Kite historical candle timestamps represent the start of the candle, and Kite recommends building live candles from WebSocket data for live strategies. The v2.1 evaluator therefore treats the current live candle as mutable and only evaluates completed candles.
+
+## Market-context and live validation (v2.1 accuracy engine)
+
+The live signal pipeline now has separate inputs for domestic/global news,
+fresh company-specific headlines weighted by configured index weights, the
+existing technical setup, directional candlestick confirmation, and the
+observed breadth of the configured equity watchlist. It continues to emit
+signals/alerts only; automatic order placement remains disabled by default.
+
+### Global and domestic news
+The RSS reader includes Indian market feeds plus CNBC World, CNBC Markets, and
+BBC Business. Feeds are fetched concurrently so a slow feed does not serially
+delay all other sources. Headlines with global macro terms are included in the
+macro news aggregate. This is a lightweight keyword sentiment model, not a
+financial-language model: verify headline polarity and source health before
+using it for trading decisions.
+
+### Constituent breadth and index weights
+The agent calculates each configured equity's most recently closed 1-minute
+return and derives a breadth bias only when at least 10 symbols are available
+and at least 60% are advancing or declining. The live log records the number
+of advancers, observed symbols, context bias, and weighting method.
+
+For genuine index-weighted impact, provide a maintained
+`data/nifty50_weights.csv` file with columns `symbol,weight_pct`. Use current
+official NIFTY 50 constituent weights from an authoritative NSE source and
+refresh them after index rebalances. If no file exists—or fewer than 60% of
+the observed symbols have valid weights—the engine explicitly falls back to
+equal-weighted breadth. It does not fabricate index weights. The configured
+equity watchlist must contain the NIFTY 50 universe for this to represent full
+NIFTY constituent breadth; a smaller custom watchlist is only a watchlist
+breadth proxy.
+
+### Candlestick scoring
+A directional pattern on the latest completed candle contributes at most one
+technical point, even if multiple overlapping patterns fire. Simultaneous
+bullish and bearish patterns add no point and are reported as a conflict.
+Pattern confirmation is one feature among trend, VWAP, momentum, volume and
+structure—not a standalone entry rule. For equity BUY signals it is optional
+supporting evidence and never blocks or triggers a signal.
+
+### Equity research-driven BUY signals
+Equity BUY signals are selected in this order:
+1. **Catalyst:** with `EQUITY_NEWS_FIRST=true` (default) only stocks with a fresh
+   positive company news item or analyst call are scanned.
+2. **Research:** `equity_research.py` scores company news, analyst ratings and
+   target upside, fundamentals (growth, margins, debt, cash flow via `yfinance`)
+   and valuation versus the sector median PE. The verdict must be `SUPPORTIVE`.
+3. **Intraday confirmation:** live price, relative volume, regime and market
+   context from the signal engine.
+4. **Risk:** entry, target, stop-loss, reward/risk of at least
+   `EQUITY_MIN_REWARD_RISK` (default 1.5) and estimated holding time.
+
+The dashboard's Equities tab shows the research verdict, analyst upside,
+reward/risk and the research basis for each open signal.
+
+### Live diagnostics
+Each closed NIFTY candle prints a `[NIFTY ANALYSIS]` line with signal,
+technical/context scores, regime, news bias, constituent breadth/method,
+candlestick score/patterns, and reasons. Review these logs with the agent
+running in `LIVE_MARKET_DATA=true` and the Kite session configured. This
+repository connection cannot access a separately running local Kite session
+or its private credentials, so it cannot verify your live broker ticks from
+the GitHub repository alone.
+
+### Validation cautions
+GitHub Actions runs unit tests on push. A passing unit suite checks code
+behavior; it does not establish a profitable strategy. Before enabling any
+new gate, compare baseline versus news, breadth and candlestick variants using
+the same point-in-time data, walk-forward splits, separate CALL/PUT metrics,
+slippage/fees, and out-of-sample periods. Never use current constituent
+weights or later-published headlines in historical rows where they were not
+yet available.
+
+
+## Phase 1 model integration (v2.1)
+
+The optional trade-quality model can be fitted from resolved historical NIFTY
+signals and then loaded by the live worker as a conservative veto filter. It
+does not generate CALL/PUT directions or override the existing score, context,
+precision, and risk checks. Leave `TRADE_QUALITY_MODEL_PATH` empty until the
+model has passed chronological walk-forward validation; the live filter is
+disabled by default.
+
+Example commands from this project directory:
+
+```powershell
+python backtester.py data/nifty_1m.csv --fit-probability-model data/setup_profiles.json
+python backtester.py data/nifty_1m.csv --fit-trade-quality-model data/trade_quality_model.json
+python backtester.py data/nifty_1m.csv --walk-forward --folds 5 --progress --round-trip-cost-points 2
+```
+
+Set `TRADE_QUALITY_MODEL_PATH=data/trade_quality_model.json` only after
+reviewing sample counts and out-of-sample performance, then restart the worker.
+The round-trip cost value is an estimate in underlying price points, not an
+option-premium or brokerage quote; replace it with a defensible estimate for
+your actual instrument and execution assumptions. Keep `AUTO_ORDER_PLACEMENT=false`
+during validation. Model fitting and historical tests do not prove live accuracy.
+
+
+## Research-only live outcome learning
+
+The live worker persists point-in-time feature snapshots with NIFTY CALL/PUT alerts. As those alerts resolve to `SUCCESS` or `FAILED`, `live_learning.py` can train a **research candidate** using older resolved observations and evaluate it on a later chronological holdout.
+
+- The worker invokes the learner after a closed spot candle updates outcomes.
+- Training starts after at least **100 resolved CALL/PUT outcomes** with stored feature snapshots.
+- A new candidate is retrained after **20 additional resolved outcomes**.
+- Outputs are written locally to `data/research_candidate_model.json` and `data/live_learning_report.json`.
+- The report compares candidate probability calibration with a training-prior baseline using Brier score, and reports the later holdout results.
+- `LIVE_LEARNING_ENABLED=false` disables automatic candidate training. Run `python live_learning.py` to perform one check/training attempt.
+- The app must be running with live market data and using the same persistent SQLite database for resolved live outcomes to accumulate. GitHub Actions report jobs do not share this local database.
+
+**Safety:** the candidate is not automatically promoted and is not connected to live signal decisions. It is not the same schema as the optional `TRADE_QUALITY_MODEL_PATH` veto model. Do not point that setting at the research candidate. Keep `AUTO_ORDER_PLACEMENT=false`; no orders are placed by this learning loop.

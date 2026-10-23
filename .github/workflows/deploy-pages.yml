@@ -1,0 +1,57 @@
+name: Deploy NiftyAgent dashboard to GitHub Pages
+
+on:
+  push:
+    branches:
+      - v2.1-accuracy-engine
+    paths:
+      - "docs/**"
+      - ".github/workflows/deploy-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-deployment
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out dashboard
+        uses: actions/checkout@v4
+      - name: Validate static dashboard files
+        run: |
+          test -s docs/index.html
+          test -s docs/data/status.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          status = json.loads(Path("docs/data/status.json").read_text(encoding="utf-8"))
+          required = {"data_state", "market_status", "latest_signal", "updated_at"}
+          missing = required - status.keys()
+          if missing:
+              raise SystemExit(f"status.json missing fields: {sorted(missing)}")
+          html = Path("docs/index.html").read_text(encoding="utf-8")
+          if "<title>NiftyAgent" not in html:
+              raise SystemExit("Dashboard title not found.")
+          print("Dashboard HTML and status JSON validated.")
+          PY
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
