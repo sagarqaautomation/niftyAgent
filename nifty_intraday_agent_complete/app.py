@@ -419,8 +419,8 @@ def render_equities() -> None:
         unsafe_allow_html=True,
     )
     st.caption(
-        "Research-led intraday setups across NSE equities. News and analyst evidence identify candidates; "
-        "live price, volume, and risk checks confirm setups. Candlestick patterns are optional context only."
+        "Intraday technical setups across NSE equities. Kite live prices, volume, and risk checks confirm setups; "
+        "news and analyst evidence are optional context. Candlestick patterns are optional context only."
     )
     if not settings.equity_scan_enabled:
         st.info("Equity scanning is disabled. Set EQUITY_SCAN_ENABLED=true to enable it.")
