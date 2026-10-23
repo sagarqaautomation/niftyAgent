@@ -16,6 +16,7 @@ from database import (
     list_equity_research_candidates,
 )
 from indicators import detect_latest_candlestick_patterns
+from intraday_recommendations import collect_intraday_recommendations, load_stock_aliases
 
 init_db()
 
@@ -445,8 +446,8 @@ def render_equities() -> None:
         with col:
             st.metric(label, value, help=note)
 
-    overview_tab, setups_tab, outcomes_tab, evidence_tab, quality_tab = st.tabs(
-        ["Overview", "Live setups", "Outcomes", "Evidence", "Model quality"]
+    overview_tab, setups_tab, outcomes_tab, evidence_tab, quality_tab, intraday_tab = st.tabs(
+        ["Overview", "Live setups", "Outcomes", "Evidence", "Model quality", "Intraday"]
     )
 
     with overview_tab:
@@ -485,6 +486,98 @@ def render_equities() -> None:
             with col:
                 st.markdown(f"**{heading}**")
                 st.caption(detail)
+
+    with intraday_tab:
+        st.subheader("Today's broker intraday ideas")
+        st.caption(
+            "Same-day public recommendation articles discovered through Google News RSS. "
+            "Broker overlap counts only brokerages explicitly named in the article. "
+            "These are reported calls, not confirmed live setups."
+        )
+        try:
+            aliases = load_stock_aliases(
+                settings.kite_instruments_csv, settings.equity_watchlist_path
+            )
+            intraday = collect_intraday_recommendations(
+                aliases, list_news(limit=500), settings.market_timezone
+            )
+        except Exception as exc:
+            intraday = {"recommendations": [], "common": [], "news_match_count": 0, "query_links": []}
+            st.warning(f"Could not load intraday recommendation sources: {type(exc).__name__}: {exc}")
+
+        recommendations = intraday["recommendations"]
+        common = intraday["common"]
+        news_matches = [row for row in recommendations if row["in_latest_news"]]
+        kpis = streamlit_ui.columns(3)
+        kpis[0].metric("Same-day articles matched", len(recommendations))
+        kpis[1].metric("Stocks named by 2+ brokers", len(common))
+        kpis[2].metric("Also in latest company news", len(news_matches))
+
+        with st.expander("Common across explicitly named brokers", expanded=True):
+            if common:
+                common_df = pd.DataFrame(common).rename(columns={
+                    "symbol": "Ticker", "brokers": "Named brokers",
+                    "broker_count": "Broker count", "in_latest_news": "In latest news",
+                    "latest_news_sources": "Latest news publishers",
+                })
+                streamlit_ui.dataframe(common_df, use_container_width=True, hide_index=True)
+            else:
+                st.info(
+                    "No stock is currently named by at least two distinct brokerages in today's matched articles. "
+                    "Unattributed media stories are excluded from broker consensus."
+                )
+
+        with st.expander("Broker recommendations also mentioned in latest news", expanded=True):
+            if news_matches:
+                latest_df = pd.DataFrame(news_matches)
+                latest_df = latest_df[[
+                    "symbol", "side", "broker", "publisher", "published_at", "title", "url"
+                ]].rename(columns={
+                    "symbol": "Ticker", "side": "Reported view", "broker": "Named broker",
+                    "publisher": "Article publisher", "published_at": "Published",
+                    "title": "Article",
+                })
+                streamlit_ui.dataframe(
+                    latest_df, use_container_width=True, hide_index=True,
+                    column_config={"url": streamlit_ui.column_config.LinkColumn(
+                        "Source link", display_text="Open"
+                    )},
+                )
+            else:
+                st.info("No matched same-day recommendation ticker also appears in today's company-news feed.")
+
+        st.subheader("All matched same-day recommendation articles")
+        if recommendations:
+            rec_df = pd.DataFrame(recommendations)[[
+                "symbol", "side", "broker", "publisher", "published_at", "title", "url"
+            ]].rename(columns={
+                "symbol": "Ticker", "side": "Reported view", "broker": "Named broker",
+                "publisher": "Article publisher", "published_at": "Published",
+                "title": "Article",
+            })
+            streamlit_ui.dataframe(
+                rec_df, use_container_width=True, hide_index=True,
+                column_config={"url": streamlit_ui.column_config.LinkColumn(
+                    "Source link", display_text="Open"
+                )},
+            )
+        else:
+            st.info(
+                "No same-day articles matched the intraday recommendation terms and a known NSE company or ticker. "
+                "This can also happen when Google News has not indexed today's calls yet."
+            )
+        st.caption(
+            "Google News RSS is refreshed at most every 5 minutes. The article publisher is shown separately from "
+            "the named brokerage; a media article is not counted as a broker call unless the broker is explicitly named. "
+            "Results can be incomplete or delayed, and stock-name matching may miss aliases."
+        )
+        if intraday["query_links"]:
+            st.markdown(
+                "Check searches directly: " + " · ".join(
+                    f"[Query {index + 1}]({url})"
+                    for index, url in enumerate(intraday["query_links"])
+                )
+            )
 
     with setups_tab:
         st.subheader("Open BUY setups")
