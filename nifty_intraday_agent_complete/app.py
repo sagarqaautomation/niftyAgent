@@ -605,7 +605,7 @@ def render_news() -> None:
             use_container_width=True,
             hide_index=True,
             column_config={
-                "analyst_recommendation": "Analyst view",
+                "analyst_recommendation": streamlit_ui.column_config.TextColumn("Analyst view"),
                 "url": streamlit_ui.column_config.LinkColumn(
                     "Article", display_text="Open"
                 )
