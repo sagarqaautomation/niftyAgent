@@ -29,6 +29,39 @@ class NewsDatabaseTests(unittest.TestCase):
             self.assertEqual(journal_mode.lower(), "wal")
             self.assertEqual(busy_timeout, 30_000)
 
+    def test_cost_adjusted_equity_outcomes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "equity.db"
+            test_settings = replace(database.settings, db_path=str(database_path))
+            with patch.object(database, "settings", test_settings):
+                database.init_db()
+                with database.connect() as connection:
+                    connection.executemany("""
+                        INSERT INTO equity_signals (
+                            created_at, symbol, signal, technical_score, context_score,
+                            total_score, entry_price, target_price, stop_loss,
+                            signal_candle_time, reason, status
+                        ) VALUES (?, ?, 'BUY', 7, 0, 7, ?, ?, ?, ?, ?, ?)
+                    """, [
+                        ("2026-10-23T09:30:00+05:30", "WIN", 100.0, 110.0, 95.0,
+                         "2026-10-23T09:30:00+05:30", "test", "TARGET_HIT"),
+                        ("2026-10-23T09:35:00+05:30", "LOSS", 100.0, 110.0, 95.0,
+                         "2026-10-23T09:35:00+05:30", "test", "STOP_HIT"),
+                    ])
+                metrics = database.equity_signal_performance(25.0)
+
+        self.assertEqual(metrics["resolved"], 2)
+        self.assertEqual(metrics["net_win_rate_percent"], 50.0)
+        self.assertEqual(metrics["gross_average_return_percent"], 2.5)
+        self.assertEqual(metrics["net_average_return_percent"], 2.25)
+        self.assertEqual(metrics["net_expectancy_r"], 0.45)
+
+    def test_cost_assumption_must_be_non_negative_and_bounded(self) -> None:
+        with self.assertRaises(ValueError):
+            database.equity_signal_performance(-1)
+        with self.assertRaises(ValueError):
+            database.equity_signal_performance(1001)
+
     def test_old_news_table_migrates_and_stores_tags(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "news.db"
@@ -66,6 +99,8 @@ class NewsDatabaseTests(unittest.TestCase):
                 database.ensure_news_columns()
                 database.insert_news({
                     "source": "test",
+                    "author": "Market Desk",
+                    "analyst_recommendation": "BUY",
                     "title": "TCS Q2 results beat estimates",
                     "url": "https://example.test/article",
                     "published_at": "2026-10-08T10:00:00+05:30",
@@ -97,6 +132,8 @@ class NewsDatabaseTests(unittest.TestCase):
             self.assertEqual(rows[0]["event_categories"], ["EARNINGS"])
             self.assertEqual(rows[0]["symbols"], ["TCS"])
             self.assertEqual(rows[0]["summary"], "Company results headline")
+            self.assertEqual(rows[0]["author"], "Market Desk")
+            self.assertEqual(rows[0]["analyst_recommendation"], "BUY")
             self.assertEqual(second_page[0]["title"], "Older market headline")
 
 
