@@ -555,23 +555,9 @@ def render_equities() -> None:
                 )},
             )
         kpis = streamlit_ui.columns(3)
-        kpis[0].metric("Same-day articles matched", len(recommendations))
-        kpis[1].metric("Stocks named by 2+ brokers", len(common))
+        kpis[0].metric("Intraday BUY stock mentions", len(display_recommendations))
+        kpis[1].metric("Distinct stocks", len({row["symbol"] for row in display_recommendations}))
         kpis[2].metric("Also in latest company news", len(news_matches))
-
-        with st.expander("Common across explicitly named brokers", expanded=True):
-            if common:
-                common_df = pd.DataFrame(common).rename(columns={
-                    "symbol": "Ticker", "brokers": "Named brokers",
-                    "broker_count": "Broker count", "in_latest_news": "In latest news",
-                    "latest_news_sources": "Latest news publishers",
-                })
-                streamlit_ui.dataframe(common_df, use_container_width=True, hide_index=True)
-            else:
-                st.info(
-                    "No stock is currently named by at least two distinct brokerages in today's matched articles. "
-                    "Unattributed media stories are excluded from broker consensus."
-                )
 
         with st.expander("Broker recommendations also mentioned in latest news", expanded=True):
             if news_matches:
@@ -584,8 +570,8 @@ def render_equities() -> None:
             render_intraday_table(display_recommendations)
         else:
             st.info(
-                "No same-day articles matched the intraday recommendation terms and a known NSE company or ticker. "
-                "This can also happen when Google News has not indexed today's calls yet."
+                "No same-day BUY article matched a stock or company name in the NSE instrument list. "
+                "Check the linked Google News query if it already shows a call that is missing here."
             )
         st.caption(
             "Google News RSS is refreshed at most every 5 minutes. The article publisher is shown separately from "
