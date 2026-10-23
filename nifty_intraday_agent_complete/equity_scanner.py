@@ -1,11 +1,15 @@
 import csv
 import math
 from pathlib import Path
-from typing import Any, Mapping, cast
+import os
+from typing import Any, Callable, Mapping, cast
 
 import pandas as pd
 
 from accuracy_config import quality_settings as quality
+from equity_research import summarize
+
+MIN_REWARD_RISK = float(os.getenv("EQUITY_MIN_REWARD_RISK", "1.5"))
 from indicators import detect_latest_candlestick_patterns
 from signal_engine import add_risk_levels, build_signal
 
@@ -68,6 +72,7 @@ def build_equity_buy_signal(
     five_minute_pattern_rows: dict[pd.Timestamp, list[dict[str, str]]] | None = None,
     premarket_context: Mapping[str, Any] | None = None,
     diagnostics: dict[str, Any] | None = None,
+    research_provider: Callable[[float], dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     def reject(reason: str) -> None:
         if diagnostics is not None:
@@ -132,12 +137,8 @@ def build_equity_buy_signal(
         pattern for pattern in matched_patterns
         if pattern["direction"] == "BEARISH"
     ]
-    if not bullish_patterns or bearish_patterns:
-        if bearish_patterns:
-            reject("Bearish candlestick pattern conflicts with BUY setup")
-        else:
-            reject("No qualifying bullish candlestick pattern")
-        return None
+    # Candlestick patterns are optional supporting evidence only; they never
+    # gate or veto an equity BUY signal.
 
     atr = analysis.get("atr")
     if atr is None or pd.isna(atr) or float(atr) <= 0:
@@ -161,6 +162,24 @@ def build_equity_buy_signal(
             f"minimum is {quality.equity_min_target_points:g}"
         )
         return None
+    risk_points = float(signal["entry_price"]) - float(signal["stop_loss"] or 0)
+    if risk_points <= 0:
+        reject("Stop-loss unavailable")
+        return None
+    reward_risk = target_points / risk_points
+    if reward_risk < MIN_REWARD_RISK:
+        reject(f"Reward/risk {reward_risk:.2f} below minimum {MIN_REWARD_RISK:g}")
+        return None
+    signal["reward_risk"] = round(reward_risk, 2)
+
+    # Research runs last because it may fetch fundamentals over the network.
+    if research_provider is not None:
+        research = research_provider(float(live_price))
+        signal["research"] = research
+        if research["verdict"] != "SUPPORTIVE":
+            reject(f"Research {research['verdict']}: {summarize(research)}")
+            return None
+        signal["reason"] = f"{signal['reason']}; {summarize(research)}"
     signal["signal"] = "BUY"
 
     average_move: float = closed_minutes["close"].diff().abs().tail(20).mean()
@@ -173,9 +192,13 @@ def build_equity_buy_signal(
         )
 
     signal["reason"] = (
-        f"{signal['reason']}; candlestick confirmation: "
-        f"{', '.join(sorted({pattern['name'] for pattern in bullish_patterns}))}; "
-        "estimated holding time uses recent 1-minute price movement"
+        f"{signal['reason']}; "
+        + (
+            "optional candlestick support: "
+            f"{', '.join(sorted({pattern['name'] for pattern in bullish_patterns}))}; "
+            if bullish_patterns and not bearish_patterns else ""
+        )
+        + "estimated holding time uses recent 1-minute price movement"
     )
     signal["feature_snapshot"] = {
         "version": 2,
@@ -190,6 +213,8 @@ def build_equity_buy_signal(
         "premarket_context": dict(analysis.get("premarket_context") or {}),
         "one_minute": _feature_row_snapshot(closed_minutes),
         "five_minute": _feature_row_snapshot(closed_five_minutes),
+        "research": signal.get("research"),
+        "reward_risk": signal.get("reward_risk"),
         "one_minute_patterns": one_minute_patterns,
         "five_minute_patterns": five_minute_patterns,
     }

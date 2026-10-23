@@ -579,7 +579,23 @@ A directional pattern on the latest completed candle contributes at most one
 technical point, even if multiple overlapping patterns fire. Simultaneous
 bullish and bearish patterns add no point and are reported as a conflict.
 Pattern confirmation is one feature among trend, VWAP, momentum, volume and
-structure—not a standalone entry rule.
+structure—not a standalone entry rule. For equity BUY signals it is optional
+supporting evidence and never blocks or triggers a signal.
+
+### Equity research-driven BUY signals
+Equity BUY signals are selected in this order:
+1. **Catalyst:** with `EQUITY_NEWS_FIRST=true` (default) only stocks with a fresh
+   positive company news item or analyst call are scanned.
+2. **Research:** `equity_research.py` scores company news, analyst ratings and
+   target upside, fundamentals (growth, margins, debt, cash flow via `yfinance`)
+   and valuation versus the sector median PE. The verdict must be `SUPPORTIVE`.
+3. **Intraday confirmation:** live price, relative volume, regime and market
+   context from the signal engine.
+4. **Risk:** entry, target, stop-loss, reward/risk of at least
+   `EQUITY_MIN_REWARD_RISK` (default 1.5) and estimated holding time.
+
+The dashboard's Equities tab shows the research verdict, analyst upside,
+reward/risk and the research basis for each open signal.
 
 ### Live diagnostics
 Each closed NIFTY candle prints a `[NIFTY ANALYSIS]` line with signal,

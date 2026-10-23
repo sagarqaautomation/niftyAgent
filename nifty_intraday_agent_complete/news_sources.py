@@ -18,6 +18,11 @@ SOURCES = {
     "LiveMint": "https://www.livemint.com/rss/markets",
     "Economic Times": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
     "Business Standard": "https://www.business-standard.com/rss/markets-106.rss",
+    # Company-level feeds: results, orders, brokerage calls, buzzing stocks.
+    "Moneycontrol Buzzing Stocks": "https://www.moneycontrol.com/rss/buzzingstocks.xml",
+    "Economic Times Stocks": "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms",
+    "Business Standard Companies": "https://www.business-standard.com/rss/companies-101.rss",
+    "LiveMint Companies": "https://www.livemint.com/rss/companies",
     # Global risk drivers that can move Indian equities through oil, yields,
     # currency, geopolitical risk and overseas risk appetite.
     "CNBC World": "https://www.cnbc.com/id/100727362/device/rss/rss.html",

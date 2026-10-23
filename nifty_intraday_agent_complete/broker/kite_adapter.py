@@ -167,6 +167,22 @@ class KiteMarketData:
         self.ticker.subscribe(tokens)
         self.ticker.set_mode(self.ticker.MODE_FULL, tokens)
 
+    def add_instrument_tokens(self, instrument_tokens: Sequence[int]) -> None:
+        """Subscribe extra tokens (QUOTE mode) while running. They are also
+        remembered so a reconnect resubscribes them."""
+        new = [
+            int(t) for t in dict.fromkeys(instrument_tokens)
+            if int(t) not in self.instrument_tokens
+        ]
+        if not new:
+            return
+        self.instrument_tokens.extend(new)
+        ticker = self.ticker
+        # While disconnected, on_connect subscribes the updated token list.
+        if ticker is not None and ticker.is_connected():
+            ticker.subscribe(new)
+            ticker.set_mode(ticker.MODE_QUOTE, new)
+
     def historical_data(
         self,
         instrument_token: int,

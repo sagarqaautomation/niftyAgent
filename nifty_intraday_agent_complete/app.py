@@ -12,10 +12,9 @@ from market_hours import is_market_open
 from database import (
     init_db, performance, latest_signal, list_signals, list_news, list_spot_candles,
     get_market_status, list_equity_signals_by_status, equity_signal_performance,
-    list_recent_equity_patterns, list_equity_scan_status,
+    list_recent_equity_patterns, list_equity_scan_status, list_equity_research_candidates,
 )
 from indicators import detect_latest_candlestick_patterns
-from equity_scanner import load_watchlist
 
 init_db()
 
@@ -229,6 +228,38 @@ def render_signals() -> None:
         st.info("No NIFTY spot candles have been stored yet.")
 
 
+def add_research_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Expose research verdict, analyst upside and reward/risk stored in each
+    signal's feature snapshot."""
+    verdicts: list[str | None] = []
+    scores: list[int | None] = []
+    upsides: list[float | None] = []
+    summaries: list[str | None] = []
+    ratios: list[float | None] = []
+    snapshots = df["feature_snapshot_json"] if "feature_snapshot_json" in df.columns else [None] * len(df)
+    for raw in snapshots:
+        try:
+            snapshot = json.loads(raw) if raw else {}
+        except (TypeError, ValueError):
+            snapshot = {}
+        research = snapshot.get("research") or {}
+        verdicts.append(research.get("verdict"))
+        scores.append(research.get("score"))
+        upsides.append((research.get("analysts") or {}).get("avg_target_upside_pct"))
+        notes = (research.get("fundamentals") or {}).get("notes") or []
+        headlines = (research.get("news") or {}).get("headlines") or []
+        parts = headlines[:1] + notes
+        summaries.append("; ".join(parts) if parts else None)
+        ratios.append(snapshot.get("reward_risk"))
+    out = df.copy()
+    out["research_verdict"] = verdicts
+    out["research_score"] = scores
+    out["analyst_upside_pct"] = upsides
+    out["research_summary"] = summaries
+    out["reward_risk"] = ratios
+    return out
+
+
 @st.fragment(run_every=5)
 def render_patterns() -> None:
     market_timezone = ZoneInfo(settings.market_timezone)
@@ -301,7 +332,7 @@ def render_patterns() -> None:
         )
     else:
         st.info("No equity patterns detected in the last six minutes.")
-    st.caption("Pattern detections are informational and do not independently trigger trades.")
+    st.caption("Pattern detections are informational and never decide whether an equity BUY is generated.")
 
 
 @st.fragment(run_every=5)
@@ -362,37 +393,61 @@ def render_equities() -> None:
 
     st.subheader("Recent Equity BUY Signals")
     st.caption(
+        "Equity BUY signals are driven by news and analyst catalysts, company fundamentals "
+        "and valuation, then confirmed by live price, volume and market context. "
+        "Candlestick patterns are optional and never decide a signal. "
         "Holding time extrapolates recent one-minute price movement; it is not a forecast or guarantee."
     )
     if settings.equity_scan_enabled:
-        try:
-            tracked_symbols = load_watchlist(settings.equity_watchlist_path)
-            st.subheader("Configured Equity Watchlist")
-            st.caption(
-                "These are the stocks the scanner is configured to monitor. "
-                "They are not BUY recommendations; qualifying BUY setups appear below."
-            )
-            if tracked_symbols:
-                st.write(" · ".join(tracked_symbols))
-            else:
-                st.warning(
-                    f"No symbols found in {settings.equity_watchlist_path}. "
-                    "Add stock symbols under the 'symbol' column."
-                )
-        except Exception as exc:
-            st.error(
-                f"Could not load equity watchlist ({settings.equity_watchlist_path}): "
-                f"{type(exc).__name__}: {exc}"
+        st.subheader("News & Research Candidates")
+        st.caption(
+            "Stocks picked from fresh company news and analyst calls, from your watchlist or "
+            "discovered across all NSE stocks (\"News discovery\"). Only SUPPORTIVE stocks can "
+            "become BUY signals, and only after live price, volume and risk checks pass."
+        )
+        candidates = list_equity_research_candidates(100)
+        if candidates:
+            candidate_df = pd.DataFrame(candidates)[[
+                "symbol", "source", "verdict", "research_score", "news_score", "analyst_score",
+                "fundamentals_score", "analyst_upside_pct", "catalyst", "basis", "updated_at",
+            ]].rename(columns={
+                "symbol": "Stock",
+                "source": "Found via",
+                "verdict": "Research verdict",
+                "research_score": "Research score",
+                "news_score": "News",
+                "analyst_score": "Analysts",
+                "fundamentals_score": "Fundamentals",
+                "analyst_upside_pct": "Analyst upside %",
+                "catalyst": "Catalyst",
+                "basis": "Research basis",
+                "updated_at": "Updated (UTC)",
+            })
+            streamlit_ui.dataframe(candidate_df, use_container_width=True, hide_index=True)
+        else:
+            st.info(
+                "No stocks have a fresh positive news or analyst catalyst right now. "
+                "The list refreshes with each news update."
             )
 
         equity_df = pd.DataFrame(list_equity_signals_by_status("OPEN", 50))
         if not equity_df.empty:
+            equity_df = add_research_columns(equity_df)
             equity_cols = [
-                "created_at", "symbol", "signal", "technical_score", "context_score",
+                "created_at", "symbol", "signal", "research_verdict", "research_score",
+                "analyst_upside_pct", "technical_score", "context_score",
                 "total_score", "entry_price", "target_price", "stop_loss",
-                "expected_holding_minutes", "signal_candle_time", "status", "reason",
+                "reward_risk", "expected_holding_minutes", "signal_candle_time",
+                "status", "research_summary", "reason",
             ]
             equity_df = equity_df[[column for column in equity_cols if column in equity_df.columns]]
+            equity_df = equity_df.rename(columns={
+                "research_verdict": "Research",
+                "research_score": "Research score",
+                "analyst_upside_pct": "Analyst upside %",
+                "reward_risk": "Reward/Risk",
+                "research_summary": "Research basis",
+            })
             streamlit_ui.dataframe(equity_df, use_container_width=True, hide_index=True)
         else:
             st.info(
@@ -462,7 +517,7 @@ def render_equities() -> None:
         else:
             st.info("No equity signals have expired.")
 
-        st.subheader("Recent Candlestick Patterns")
+        st.subheader("Recent Candlestick Patterns (optional)")
         pattern_df = pd.DataFrame(list_recent_equity_patterns(100))
         if not pattern_df.empty:
             pattern_cols = ["timestamp", "symbol", "timeframe", "pattern_names"]
@@ -476,7 +531,7 @@ def render_equities() -> None:
         else:
             st.info("No candlestick patterns detected in stored equity candles yet.")
         st.caption(
-            "Shadow analysis only: patterns do not change BUY decisions until backtested."
+            "Supporting information only: patterns add at most one optional score point and never block or trigger a BUY."
         )
 
         equity_performance = equity_signal_performance()

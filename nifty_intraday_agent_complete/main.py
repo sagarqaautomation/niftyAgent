@@ -1,3 +1,4 @@
+import json
 import queue
 import time
 import threading
@@ -21,7 +22,8 @@ from database import (
     update_analysis_status, utc_now, insert_premarket_snapshot,
     # Buffered: flushed in one transaction by the equity-status-flush thread.
     queue_equity_scan_status as update_equity_scan_status,
-    flush_equity_scan_status, update_kite_auth_status
+    flush_equity_scan_status, update_kite_auth_status,
+    replace_equity_research_candidates,
 )
 from news_sources import (
     aggregate_news,
@@ -34,6 +36,10 @@ from signal_engine import build_signal, add_risk_levels
 from probability_engine import load_model
 from indicators import detect_candlestick_pattern_rows, detect_latest_candlestick_patterns
 from market_context import load_constituent_weights, summarize_constituent_news, summarize_constituent_returns
+from equity_research import build_research as build_equity_research
+from equity_research import select_candidates as select_equity_candidates
+from equity_research import build_discovery_universe
+from equity_research import summarize as summarize_research
 from equity_scanner import (
     build_equity_buy_signal, load_watchlist,
     resolve_equity_tokens,
@@ -499,6 +505,8 @@ def main() -> None:
         equity_tokens_by_symbol: dict[str, int] = {}
         equity_exchange_by_symbol: dict[str, str] = {}
         equity_news_aliases: dict[str, list[str]] = {}
+        discovery_tokens: dict[str, int] = {}
+        discovery_names: dict[str, str] = {}
         instrument_alias_sources: list[dict[str, Any]] = []
         if settings.equity_scan_enabled:
             try:
@@ -540,10 +548,20 @@ def main() -> None:
                     company_name = str(instrument.get("name", "")).strip()
                     if company_name:
                         equity_news_aliases[symbol].append(company_name)
+                if settings.equity_discovery_enabled and settings.equity_news_first:
+                    discovery_tokens, discovery_names = build_discovery_universe(
+                        equity_instruments, exclude=equity_news_aliases
+                    )
+                    print(
+                        f"Equity discovery universe: {len(discovery_tokens)} additional "
+                        f"NSE stocks (max {settings.equity_discovery_max_additions} added per session)",
+                        flush=True,
+                    )
             except Exception as exc:
                 print(f"Equity scan setup failed; continuing with NIFTY only: {exc}")
                 equity_tokens_by_symbol = {}
                 equity_news_aliases = {}
+                discovery_tokens, discovery_names = {}, {}
         if news_items and equity_news_aliases:
             tag_news_symbols(news_items, equity_news_aliases)
             for item in news_items:
@@ -582,15 +600,127 @@ def main() -> None:
     last_equity_processed: dict[str, pd.Timestamp] = {}
     last_equity_persisted_five_minute: dict[str, pd.Timestamp] = {}
     active_equity_setups: set[str] = set()
+    candidate_state: dict[str, Any] = {
+        "source": None, "symbols": {}, "prices": {}, "running": False,
+    }
+    dynamic_symbols: set[str] = set()
+    dynamic_lock = threading.Lock()
+
+    def add_dynamic_equity(symbol: str) -> bool:
+        """Start scanning a stock outside the watchlist: warm its candles,
+        route its ticks, then subscribe it on the live WebSocket."""
+        token = discovery_tokens.get(symbol)
+        if token is None or symbol in equity_tokens_by_symbol:
+            return False
+        with dynamic_lock:
+            if len(dynamic_symbols) >= settings.equity_discovery_max_additions:
+                return False
+            dynamic_symbols.add(symbol)
+        equity_engines[symbol] = CandleEngine(refresh_on_rollover_only=True)
+        equity_engine_locks[symbol] = threading.RLock()
+        warm_equity_history({symbol: token})
+        if symbol not in last_equity_processed:
+            with dynamic_lock:
+                dynamic_symbols.discard(symbol)
+            equity_engines.pop(symbol, None)
+            equity_engine_locks.pop(symbol, None)
+            return False
+        equity_news_aliases[symbol] = [symbol, discovery_names.get(symbol, symbol)]
+        equity_exchange_by_symbol[symbol] = "NSE"
+        equity_tokens_by_symbol[symbol] = token
+        equity_symbol_by_token[token] = symbol
+        try:
+            broker.add_instrument_tokens([token])
+        except Exception as exc:
+            print(f"[EQUITY DISCOVERY] subscribe failed for {symbol}: {type(exc).__name__}: {exc}", flush=True)
+        update_equity_scan_status(
+            symbol, instrument_token=token,
+            rejection_reason="Added from news discovery; waiting for live tick",
+        )
+        print(
+            f"[EQUITY DISCOVERY] added {symbol} ({discovery_names.get(symbol, '')}); "
+            f"{len(dynamic_symbols)}/{settings.equity_discovery_max_additions} slots used",
+            flush=True,
+        )
+        return True
+
+    def publish_research_candidates(
+        items: list[NewsItem], candidates: dict[str, str]
+    ) -> list[dict[str, Any]]:
+        # Runs off the tick thread: fundamentals lookups are network calls.
+        rows: list[dict[str, Any]] = []
+        picked = list(candidates.items())[:40]
+        prices = candidate_state["prices"]
+        missing = [symbol for symbol, _ in picked if symbol not in prices]
+        if missing:
+            try:
+                instruments = [
+                    f"{equity_exchange_by_symbol.get(symbol, 'NSE')}:{symbol}" for symbol in missing
+                ]
+                quotes = broker.quotes(instruments)
+                for symbol, instrument in zip(missing, instruments):
+                    last_price = (quotes.get(instrument) or {}).get("last_price")
+                    if last_price:
+                        prices[symbol] = float(last_price)
+            except Exception as exc:
+                print(f"[EQUITY RESEARCH] quote lookup failed: {type(exc).__name__}: {exc}", flush=True)
+        try:
+            for symbol, catalyst in picked:
+                price = float(prices.get(symbol, 0.0))
+                discovered = symbol in discovery_names
+                research = build_equity_research(
+                    symbol, items,
+                    equity_news_aliases.get(symbol, [discovery_names.get(symbol, symbol)]),
+                    price,
+                    news_key=discovery_names.get(symbol) if discovered else None,
+                )
+                rows.append({
+                    "symbol": symbol,
+                    "source": "News discovery" if discovered else "Watchlist",
+                    "verdict": research["verdict"],
+                    "research_score": research["score"],
+                    "news_score": research["news"]["score"],
+                    "analyst_score": research["analysts"]["score"],
+                    "fundamentals_score": research["fundamentals"]["score"],
+                    "catalyst": catalyst,
+                    "analyst_upside_pct": research["analysts"]["avg_target_upside_pct"],
+                    "basis": summarize_research(research),
+                    "research_json": json.dumps(research, default=str),
+                })
+            replace_equity_research_candidates(rows)
+        except Exception as exc:
+            print(f"[EQUITY RESEARCH] publish failed: {type(exc).__name__}: {exc}", flush=True)
+        return rows
+
+    def refresh_equity_candidates(items: list[NewsItem]) -> None:
+        try:
+            candidates = select_equity_candidates(
+                items,
+                dict(equity_news_aliases),
+                name_only=discovery_names if discovery_tokens else None,
+            )
+            candidate_state["symbols"] = candidates
+            rows = publish_research_candidates(items, candidates)
+            if settings.equity_discovery_enabled:
+                # Best-researched stocks get the limited subscription slots first.
+                for row in sorted(rows, key=lambda r: -int(r["research_score"])):
+                    symbol = str(row["symbol"])
+                    if row["verdict"] == "SUPPORTIVE" and symbol not in equity_tokens_by_symbol:
+                        add_dynamic_equity(symbol)
+        except Exception as exc:
+            print(f"[EQUITY RESEARCH] candidate refresh failed: {type(exc).__name__}: {exc}", flush=True)
+        finally:
+            candidate_state["running"] = False
     equity_cumulative_volumes: dict[str, float] = {}
     equity_volume_dates: dict[str, Any] = {}
     latest_equity_returns_pct: dict[str, float] = {}
     last_equity_status_write: dict[str, float] = {}
     last_equity_learning_check = 0.0
-    def warm_equity_history() -> None:
+    def warm_equity_history(targets: Mapping[str, int] | None = None) -> None:
+        warm_items = list((targets if targets is not None else equity_tokens_by_symbol).items())
         # Persist scanner status for every configured symbol, including symbols
         # that have not produced a qualifying BUY signal.
-        for symbol, token in equity_tokens_by_symbol.items():
+        for symbol, token in warm_items:
             update_equity_scan_status(
                 symbol,
                 instrument_token=token,
@@ -603,7 +733,7 @@ def main() -> None:
         if equity_engines:
             equity_history_end = pd.Timestamp.now(tz=settings.market_timezone).to_pydatetime()
             equity_history_start = equity_history_end - timedelta(days=5)
-            for equity_index, (symbol, token) in enumerate(equity_tokens_by_symbol.items()):
+            for equity_index, (symbol, token) in enumerate(warm_items):
                 # Stay under broker historical-data request limits while warming a
                 # large watchlist (typically up to 200 symbols).
                 if equity_index:
@@ -982,6 +1112,30 @@ def main() -> None:
 
                 with premarket_lock:
                     current_premarket_context = dict(premarket_context_state)
+                if settings.equity_news_first:
+                    if candidate_state["source"] is not news_items and not candidate_state["running"]:
+                        candidate_state["source"] = news_items
+                        candidate_state["running"] = True
+                        threading.Thread(
+                            target=refresh_equity_candidates,
+                            args=(list(news_items),),
+                            name="equity-candidates",
+                            daemon=True,
+                        ).start()
+                    candidate_state["prices"][equity_symbol] = float(equity_price)
+                    if equity_symbol not in candidate_state["symbols"]:
+                        active_equity_setups.discard(equity_symbol)
+                        update_equity_scan_status(
+                            equity_symbol,
+                            instrument_token=int(tick_token) if tick_token is not None else None,
+                            last_price=float(equity_price),
+                            last_tick_at=equity_time.isoformat(),
+                            one_minute_bars=int(len(equity_frames["1min"])),
+                            five_minute_bars=int(len(equity_frames["5min"])),
+                            last_evaluated_at=utc_now(),
+                            rejection_reason="No fresh news or analyst catalyst",
+                        )
+                        continue
                 scanner_diagnostic: dict[str, Any] = {}
                 equity_signal = build_equity_buy_signal(
                     equity_symbol,
@@ -995,6 +1149,13 @@ def main() -> None:
                     ),
                     premarket_context=current_premarket_context,
                     diagnostics=scanner_diagnostic,
+                    research_provider=lambda px, _s=equity_symbol: build_equity_research(
+                        _s,
+                        news_items,
+                        equity_news_aliases.get(_s, [_s]),
+                        px,
+                        news_key=discovery_names.get(_s),
+                    ),
                 )
                 equity_one_minute_bars = int(len(equity_frames["1min"]))
                 equity_five_minute_bars = int(len(equity_frames["5min"]))

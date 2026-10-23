@@ -144,6 +144,22 @@ class EquityScannerTests(unittest.TestCase):
             "Signal engine returned WAIT: high-volatility market requires score >= 8",
         )
 
+    @patch("equity_scanner.detect_latest_candlestick_patterns")
+    @patch("equity_scanner.build_signal")
+    def test_buy_signal_does_not_require_candlestick_pattern(
+        self, build_signal_mock: MagicMock, patterns_mock: MagicMock
+    ) -> None:
+        patterns_mock.return_value = []
+        build_signal_mock.return_value = self._analysis(
+            quality.relative_volume_threshold + 0.1
+        )
+
+        signal = build_equity_buy_signal("TEST", self._frames(), 102.0)
+
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertEqual(signal["signal"], "BUY")
+
 
 if __name__ == "__main__":
     unittest.main()

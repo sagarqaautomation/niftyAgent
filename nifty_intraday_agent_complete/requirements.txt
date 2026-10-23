@@ -9,6 +9,7 @@ numpy>=2.0,<3
 scikit-learn>=1.5,<2
 requests>=2.32,<3
 feedparser>=6.0,<7
+yfinance>=0.2.40
 twilio>=9.0,<10
 kiteconnect>=5.0,<6
 pydantic>=2.0,<3

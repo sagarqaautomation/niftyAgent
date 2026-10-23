@@ -262,6 +262,7 @@ def init_db():
     ensure_equity_candle_patterns_column()
     ensure_equity_signal_expired_status()
     ensure_equity_scan_status_table()
+    ensure_equity_research_candidates_table()
     expire_overdue_equity_outcomes()
     expire_stale_equity_signals()
     normalize_candle_timestamps()
@@ -383,6 +384,61 @@ def flush_equity_scan_status() -> int:
                 )
         raise
     return len(batch)
+
+
+def ensure_equity_research_candidates_table() -> None:
+    with connect() as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS equity_research_candidates (
+            symbol TEXT PRIMARY KEY,
+            verdict TEXT NOT NULL,
+            research_score INTEGER NOT NULL,
+            news_score INTEGER,
+            analyst_score INTEGER,
+            fundamentals_score INTEGER,
+            catalyst TEXT,
+            analyst_upside_pct REAL,
+            basis TEXT,
+            research_json TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(equity_research_candidates)")}
+        if "source" not in columns:
+            conn.execute(
+                "ALTER TABLE equity_research_candidates ADD COLUMN source TEXT DEFAULT 'Watchlist'"
+            )
+
+
+def replace_equity_research_candidates(rows: list[dict[str, Any]]) -> None:
+    """Atomically replace the published candidate list."""
+    now = utc_now()
+    with connect() as conn:
+        conn.execute("DELETE FROM equity_research_candidates")
+        conn.executemany("""
+        INSERT INTO equity_research_candidates
+        (symbol,verdict,research_score,news_score,analyst_score,fundamentals_score,
+         catalyst,analyst_upside_pct,basis,research_json,updated_at,source)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """, [(
+            row["symbol"], row["verdict"], row["research_score"], row.get("news_score"),
+            row.get("analyst_score"), row.get("fundamentals_score"), row.get("catalyst"),
+            row.get("analyst_upside_pct"), row.get("basis"), row.get("research_json"), now,
+            row.get("source", "Watchlist"),
+        ) for row in rows])
+
+
+def list_equity_research_candidates(limit: int = 100) -> list[dict[str, Any]]:
+    with connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+        SELECT symbol,source,verdict,research_score,news_score,analyst_score,fundamentals_score,
+               catalyst,analyst_upside_pct,basis,updated_at
+        FROM equity_research_candidates
+        ORDER BY CASE verdict WHEN 'SUPPORTIVE' THEN 0 WHEN 'INSUFFICIENT' THEN 1 ELSE 2 END,
+                 research_score DESC, symbol ASC LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(row) for row in rows]
 
 
 def list_equity_scan_status(limit: int = 200) -> list[dict[str, Any]]:
