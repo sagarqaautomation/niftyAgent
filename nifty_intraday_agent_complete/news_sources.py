@@ -173,13 +173,13 @@ def _published_epoch(entry: Any) -> float | None:
 
 def extract_analyst_recommendation(text: str) -> str | None:
     """Extract explicit BUY/SELL/HOLD language; this is a headline heuristic."""
-    normalized = re.sub(r"\\s+", " ", (text or "").lower())
+    normalized = re.sub(r"\s+", " ", (text or "").lower())
     patterns = (
-        r"\\b(?:maintains?|reiterates?|reaffirms?)\\s+(?:a\\s+)?(buy|sell|hold)\\b",
-        r"\\b(?:upgrades?|downgrades?|cuts?|initiates?|starts?)\\b.{0,80}\\b(?:to|at|with)\\s+(buy|sell|hold)\\b",
-        r"\\b(buy|sell|hold)\\s+(?:rating|recommendation|call)\\b",
-        r"\\b(?:recommends?|recommended|recommending)\\b.{0,80}\\b(buy|sell|hold)\\b",
-        r"\\banalysts?\\b.{0,80}\\b(buy|sell|hold)\\b",
+        r"\b(?:maintains?|reiterates?|reaffirms?)\s+(?:a\s+)?(buy|sell|hold)\b",
+        r"\b(?:upgrades?|downgrades?|cuts?|initiates?|starts?)\b.{0,80}\b(?:to|at|with)\s+(buy|sell|hold)\b",
+        r"\b(buy|sell|hold)\s+(?:rating|recommendation|call)\b",
+        r"\b(?:recommends?|recommended|recommending)\b.{0,80}\b(buy|sell|hold)\b",
+        r"\banalysts?\b.{0,80}\b(buy|sell|hold)\b",
     )
     recommendations = {
         match.upper()
