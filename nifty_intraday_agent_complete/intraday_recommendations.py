@@ -138,6 +138,57 @@ def _source_items() -> list[dict[str, Any]]:
     return [dict(item) for item in fetched]
 
 
+_PRICE = r"(?:₹|Rs\.?\s*)?([0-9][0-9,]*(?:\.[0-9]+)?)"
+_ENTRY_RE = re.compile(
+    r"\bentry(?:\s+zone)?\s*[:@-]?\s*" + _PRICE
+    + r"(?:\s*(?:to|[-–])\s*(?:₹|Rs\.?\s*)?([0-9][0-9,]*(?:\.[0-9]+)?))?",
+    re.IGNORECASE,
+)
+_TARGET1_RE = re.compile(r"\b(?:target\s*1|t1)\s*[:@-]?\s*" + _PRICE, re.IGNORECASE)
+_TARGET2_RE = re.compile(r"\b(?:target\s*2|t2)\s*[:@-]?\s*" + _PRICE, re.IGNORECASE)
+_TARGET_RE = re.compile(r"\b(?:target|tgt)\s*[:@-]?\s*" + _PRICE, re.IGNORECASE)
+_STOP_RE = re.compile(r"\b(?:stop[- ]?loss|sl)\s*[:@-]?\s*" + _PRICE, re.IGNORECASE)
+_EXIT_RE = re.compile(
+    r"\b(?:exit|square[- ]?off|book)\s+by\s+(\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?)",
+    re.IGNORECASE,
+)
+
+
+def _number(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _call_details(text: str, title: str, summary: str) -> dict[str, Any]:
+    entry = _ENTRY_RE.search(text)
+    target1 = _TARGET1_RE.search(text)
+    target2 = _TARGET2_RE.search(text)
+    targets = [_number(match.group(1)) for match in _TARGET_RE.finditer(text)]
+    target1_value = _number(target1.group(1)) if target1 else (targets[0] if targets else None)
+    target2_value = _number(target2.group(1)) if target2 else (
+        targets[1] if len(targets) > 1 else None
+    )
+    stop = _STOP_RE.search(text)
+    exit_time = _EXIT_RE.search(text)
+    catalyst = re.sub(r"\s+", " ", summary or title).strip()
+    return {
+        "cmp_price": None,
+        "entry_low": _number(entry.group(1)) if entry else None,
+        "entry_high": _number(entry.group(2)) if entry and entry.group(2) else (
+            _number(entry.group(1)) if entry else None
+        ),
+        "target_1": target1_value,
+        "target_2": target2_value,
+        "stop_loss": _number(stop.group(1)) if stop else None,
+        "exit_by": exit_time.group(1).strip() if exit_time else None,
+        "catalyst": catalyst[:240] if catalyst else "",
+    }
+
+
 def collect_intraday_recommendations(
     stock_aliases: dict[str, list[str]],
     latest_news: list[dict[str, Any]],
@@ -192,6 +243,7 @@ def collect_intraday_recommendations(
                 "publisher": publisher, "title": title, "published_at": item.get("published_at"),
                 "published_epoch": epoch, "url": item.get("url"),
                 "in_latest_news": symbol in news_symbols,
+                **_call_details(body, title, item.get("summary", "")),
             })
 
     broker_sets: dict[str, set[str]] = defaultdict(set)
