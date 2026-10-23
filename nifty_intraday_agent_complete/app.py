@@ -395,7 +395,7 @@ def render_equities() -> None:
     st.caption(
         "Equity BUY signals are driven by news and analyst catalysts, company fundamentals "
         "and valuation, then confirmed by live price, volume and market context. "
-        "Candlestick patterns are optional and never decide a signal. "
+        "Candlestick patterns are optional and never decide an equity signal. "
         "Holding time extrapolates recent one-minute price movement; it is not a forecast or guarantee."
     )
     if settings.equity_scan_enabled:
@@ -562,8 +562,10 @@ def render_equities() -> None:
 
 
 @st.fragment(run_every=60)
+@st.fragment(run_every=settings.news_refresh_seconds)
 def render_news() -> None:
     st.subheader("Recent News")
+    st.caption(f"Configured news feeds refresh every {settings.news_refresh_seconds} seconds. Analyst labels are extracted from explicit headline language and should be checked against the article.")
     news_df = pd.DataFrame(list_news(limit=50))
     if not news_df.empty:
         page_size = 10
@@ -585,7 +587,7 @@ def render_news() -> None:
         visible_news = news_df.iloc[start:start + page_size].copy()
         news_cols = [
             "source", "title", "event_categories", "symbols",
-            "market_bias", "published_at", "url",
+            "analyst_recommendation", "market_bias", "published_at", "url",
         ]
         visible_news = visible_news[
             [column for column in news_cols if column in visible_news.columns]
@@ -603,6 +605,7 @@ def render_news() -> None:
             use_container_width=True,
             hide_index=True,
             column_config={
+                "analyst_recommendation": "Analyst view",
                 "url": streamlit_ui.column_config.LinkColumn(
                     "Article", display_text="Open"
                 )
