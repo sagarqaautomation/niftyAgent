@@ -5,6 +5,7 @@ articles are evidence links, not broker-authored calls unless their text says so
 """
 from __future__ import annotations
 
+import calendar
 import csv
 import re
 import threading
@@ -109,7 +110,7 @@ def _source_items() -> list[dict[str, Any]]:
                 link = str(entry.get("link") or "").strip()
                 epoch = entry.get("published_parsed") or entry.get("updated_parsed")
                 published_epoch = (
-                    time.mktime(epoch) if epoch else None
+                    calendar.timegm(epoch) if epoch else None
                 )
                 fetched.append({
                     "title": title, "summary": summary, "published_at": published,
