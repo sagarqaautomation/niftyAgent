@@ -408,242 +408,229 @@ def render_equity_evidence(rows: list[dict[str, Any]]) -> None:
 @st.fragment(run_every=5)
 def render_equities() -> None:
     market_day = datetime.now(ZoneInfo(settings.market_timezone)).date()
-    st.subheader("Equity Research Learning")
-    learning_report_path = Path("data/equity_live_learning_report.json")
-    if learning_report_path.exists():
-        try:
-            learning_report = json.loads(learning_report_path.read_text(encoding="utf-8"))
-            learning_status = str(learning_report.get("status", "UNKNOWN"))
-            st.write(
-                f"Status: {learning_status} · "
-                f"Resolved outcomes: {learning_report.get('resolved_samples', 0)} · "
-                f"Active model changed: {learning_report.get('active_model_changed', False)}"
-            )
-            holdout = learning_report.get("holdout") or {}
-            if holdout:
-                st.write(
-                    f"Chronological holdout: {holdout.get('samples', 0)} outcomes · "
-                    f"win rate: {holdout.get('win_rate_pct', 'N/A')}% · "
-                    f"Brier improvement vs baseline: "
-                    f"{holdout.get('brier_improvement_vs_baseline', 'N/A')}"
-                )
-        except (OSError, ValueError, TypeError) as exc:
-            st.warning(f"Could not read equity learning report: {exc}")
-    else:
-        st.info(
-            "No equity learning report yet. The learner needs at least 100 resolved "
-            "equity target/stop outcomes with feature snapshots before it can evaluate a candidate."
-        )
-
-    st.subheader("Live Equity Scanner Diagnostics")
-    scanner_rows = list_equity_scan_status(200)
-    if scanner_rows:
-        scanner_df = pd.DataFrame(scanner_rows)
-        scanner_display_cols = [
-            "symbol", "last_price", "last_tick_at", "one_minute_bars",
-            "five_minute_bars", "last_evaluated_at", "rejection_reason",
-        ]
-        scanner_df = scanner_df[
-            [column for column in scanner_display_cols if column in scanner_df.columns]
-        ].rename(columns={
-            "symbol": "Stock",
-            "last_price": "Latest price",
-            "last_tick_at": "Last tick",
-            "one_minute_bars": "1m bars",
-            "five_minute_bars": "5m bars",
-            "last_evaluated_at": "Last evaluation",
-            "rejection_reason": "Scanner status / rejection reason",
-        })
-        streamlit_ui.dataframe(scanner_df, use_container_width=True, hide_index=True)
-    else:
-        st.info(
-            "No per-stock scanner diagnostics have been recorded yet. "
-            "Check the worker log for watchlist resolution and subscription errors."
-        )
-
-    st.subheader("Recent Equity BUY Signals")
-    st.caption(
-        "Equity BUY signals are driven by news and analyst catalysts, company fundamentals "
-        "and valuation, then confirmed by live price, volume and market context. "
-        "Candlestick patterns are optional and never decide an equity signal. "
-        "Holding time extrapolates recent one-minute price movement; it is not a forecast or guarantee."
+    st.markdown(
+        """
+        <div class="section-header">
+          <div><div class="section-kicker">MARKET INTELLIGENCE</div>
+          <h2 style="margin:0">Equity workspace</h2></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    if settings.equity_scan_enabled:
-        st.subheader("News & Research Candidates")
-        st.caption(
-            "Stocks picked from fresh company news and analyst calls, from your watchlist or "
-            "discovered across all NSE stocks (\"News discovery\"). Only SUPPORTIVE stocks can "
-            "become BUY signals, and only after live price, volume and risk checks pass."
-        )
-        candidates = list_equity_research_candidates(100)
+    st.caption(
+        "Research-led intraday setups across NSE equities. News and analyst evidence identify candidates; "
+        "live price, volume, and risk checks confirm setups. Candlestick patterns are optional context only."
+    )
+    if not settings.equity_scan_enabled:
+        st.info("Equity scanning is disabled. Set EQUITY_SCAN_ENABLED=true to enable it.")
+        return
+
+    performance = equity_signal_performance(25.0)
+    candidates = list_equity_research_candidates(200)
+    open_rows = list_equity_signals_by_status("OPEN", 200)
+    stop_rows = list_equity_signals_by_status("STOP_HIT", 200, market_day=market_day)
+    target_rows = list_equity_signals_by_status("TARGET_HIT", 200, market_day=market_day)
+    expired_rows = list_equity_signals_by_status("EXPIRED", 200, market_day=market_day)
+    scanner_rows = list_equity_scan_status(200)
+
+    metric_cols = streamlit_ui.columns(5)
+    metric_values = [
+        ("Research candidates", len(candidates), "Fresh catalysts"),
+        ("Active setups", len(open_rows), "Open BUY signals"),
+        ("Targets today", len(target_rows), "Resolved today"),
+        ("Stops today", len(stop_rows), "Resolved today"),
+        ("Net win rate", f"{performance['net_win_rate_percent']}%" if performance["net_win_rate_percent"] is not None else "—", f"After 25 bps · {performance['resolved']} resolved"),
+    ]
+    for col, (label, value, note) in zip(metric_cols, metric_values):
+        with col:
+            st.metric(label, value, help=note)
+
+    overview_tab, setups_tab, outcomes_tab, evidence_tab, quality_tab = st.tabs(
+        ["Overview", "Live setups", "Outcomes", "Evidence", "Model quality"]
+    )
+
+    with overview_tab:
+        st.subheader("Research pipeline")
+        st.caption("Candidates need supportive research and live confirmation before becoming a BUY setup.")
         if candidates:
-            candidate_df = pd.DataFrame(candidates)[[
-                "symbol", "source", "verdict", "research_score", "news_score", "analyst_score",
-                "fundamentals_score", "analyst_upside_pct", "catalyst", "basis", "updated_at",
-            ]].rename(columns={
-                "symbol": "Stock",
-                "source": "Found via",
-                "verdict": "Research verdict",
-                "research_score": "Research score",
-                "news_score": "News",
-                "analyst_score": "Analysts",
-                "fundamentals_score": "Fundamentals",
-                "analyst_upside_pct": "Analyst upside %",
-                "catalyst": "Catalyst",
-                "basis": "Research basis",
-                "updated_at": "Updated (UTC)",
+            candidate_df = pd.DataFrame(candidates)
+            candidate_cols = [
+                "symbol", "verdict", "research_score", "news_score", "analyst_score",
+                "fundamentals_score", "analyst_upside_pct", "catalyst", "source", "updated_at",
+            ]
+            candidate_df = candidate_df[[c for c in candidate_cols if c in candidate_df.columns]]
+            candidate_df = candidate_df.rename(columns={
+                "symbol": "Ticker", "verdict": "Research view", "research_score": "Score",
+                "news_score": "News", "analyst_score": "Analysts", "fundamentals_score": "Fundamentals",
+                "analyst_upside_pct": "Analyst upside %", "catalyst": "Catalyst",
+                "source": "Discovery source", "updated_at": "Updated (UTC)",
             })
+            verdicts = ["All views"] + sorted(candidate_df["Research view"].dropna().astype(str).unique().tolist()) if "Research view" in candidate_df else ["All views"]
+            selected_verdict = st.selectbox("Research view", verdicts, key="equity_research_view")
+            if selected_verdict != "All views" and "Research view" in candidate_df:
+                candidate_df = candidate_df[candidate_df["Research view"] == selected_verdict]
             streamlit_ui.dataframe(candidate_df, use_container_width=True, hide_index=True)
         else:
-            st.info(
-                "No stocks have a fresh positive news or analyst catalyst right now. "
-                "The list refreshes with each news update."
-            )
+            st.info("No fresh positive news or analyst catalysts are available. The list updates with the news feed.")
 
-        equity_df = pd.DataFrame(list_equity_signals_by_status("OPEN", 50))
-        if not equity_df.empty:
-            equity_df = add_research_columns(equity_df)
-            equity_cols = [
-                "created_at", "symbol", "signal", "research_verdict", "research_score",
-                "analyst_upside_pct", "technical_score", "context_score",
-                "total_score", "entry_price", "target_price", "stop_loss",
-                "reward_risk", "expected_holding_minutes", "signal_candle_time",
-                "status", "research_summary", "reason",
-            ]
-            equity_df = equity_df[[column for column in equity_cols if column in equity_df.columns]]
-            equity_df = equity_df.rename(columns={
-                "research_verdict": "Research",
-                "research_score": "Research score",
-                "analyst_upside_pct": "Analyst upside %",
-                "reward_risk": "Reward/Risk",
-                "research_summary": "Research basis",
-            })
-            streamlit_ui.dataframe(equity_df, use_container_width=True, hide_index=True)
-        else:
-            st.info(
-                "No open equity BUY setups right now. The scanner continues "
-                "evaluating the enabled watchlist; resolved hits are shown below."
-            )
-
-        stop_col, target_col = streamlit_ui.columns(2)
-        outcome_cols = [
-            "resolved_at", "symbol", "entry_price", "stop_loss", "target_price",
-            "result_price", "total_score",
+        st.subheader("How an equity setup is confirmed")
+        flow_cols = streamlit_ui.columns(4)
+        flow = [
+            ("01 · Discover", "Company news and explicit analyst calls"),
+            ("02 · Research", "Catalyst, fundamentals, valuation, and risk"),
+            ("03 · Confirm", "Live price, volume, and market context"),
+            ("04 · Track", "Entry, stop, target, and outcome evidence"),
         ]
-        with stop_col:
-            st.subheader("Stop Loss Hit Today")
-            stop_df = pd.DataFrame(
-                list_equity_signals_by_status(
-                    "STOP_HIT", 50, market_day=market_day
-                )
-            )
-            if not stop_df.empty:
-                stop_df = stop_df[[column for column in outcome_cols if column in stop_df.columns]]
-                stop_df = stop_df.rename(columns={
-                    "resolved_at": "Resolved at (UTC)",
-                    "result_price": "Hit bar close",
-                    "total_score": "Score",
-                })
-                streamlit_ui.dataframe(stop_df, use_container_width=True, hide_index=True)
-            else:
-                st.info("No stop losses have been hit.")
+        for col, (heading, detail) in zip(flow_cols, flow):
+            with col:
+                st.markdown(f"**{heading}**")
+                st.caption(detail)
 
-        with target_col:
-            st.subheader("Target Hit Today")
-            target_df = pd.DataFrame(
-                list_equity_signals_by_status(
-                    "TARGET_HIT", 50, market_day=market_day
-                )
-            )
-            if not target_df.empty:
-                target_df = target_df[[column for column in outcome_cols if column in target_df.columns]]
-                target_df = target_df.rename(columns={
-                    "resolved_at": "Resolved at (UTC)",
-                    "result_price": "Hit bar close",
-                    "total_score": "Score",
-                })
-                streamlit_ui.dataframe(target_df, use_container_width=True, hide_index=True)
-            else:
-                st.info("No targets have been hit.")
-
-        st.subheader("Expired Signals Today")
-        expired_df = pd.DataFrame(
-            list_equity_signals_by_status(
-                "EXPIRED", 50, market_day=market_day
-            )
-        )
-        if not expired_df.empty:
-            expired_cols = [
-                "resolved_at", "symbol", "entry_price", "stop_loss", "target_price",
-                "expected_holding_minutes", "signal_candle_time", "total_score",
+    with setups_tab:
+        st.subheader("Open BUY setups")
+        st.caption("Use entry, stop, target, and research basis together. Holding-time estimates are extrapolations, not forecasts.")
+        if open_rows:
+            open_df = add_research_columns(pd.DataFrame(open_rows))
+            cols = [
+                "created_at", "symbol", "research_verdict", "research_score", "analyst_upside_pct",
+                "total_score", "entry_price", "target_price", "stop_loss", "reward_risk",
+                "expected_holding_minutes", "status", "research_summary", "reason",
             ]
-            expired_df = expired_df[[column for column in expired_cols if column in expired_df.columns]]
-            expired_df = expired_df.rename(columns={
-                "resolved_at": "Expired at (UTC)",
-                "expected_holding_minutes": "Estimated hold (min)",
+            open_df = open_df[[c for c in cols if c in open_df.columns]].rename(columns={
+                "created_at": "Created (UTC)", "symbol": "Ticker", "research_verdict": "Research",
+                "research_score": "Research score", "analyst_upside_pct": "Analyst upside %",
+                "total_score": "Setup score", "entry_price": "Entry", "target_price": "Target",
+                "stop_loss": "Stop", "reward_risk": "Reward / risk",
+                "expected_holding_minutes": "Est. hold (min)", "research_summary": "Research basis",
+            })
+            streamlit_ui.dataframe(open_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No open BUY setups right now. New candidates appear here after live confirmation.")
+        with st.expander("Scanner coverage and rejections", expanded=False):
+            if scanner_rows:
+                scanner_df = pd.DataFrame(scanner_rows)
+                cols = ["symbol", "last_price", "last_tick_at", "one_minute_bars", "five_minute_bars", "last_evaluated_at", "rejection_reason"]
+                scanner_df = scanner_df[[c for c in cols if c in scanner_df.columns]].rename(columns={
+                    "symbol": "Ticker", "last_price": "Latest price", "last_tick_at": "Last tick",
+                    "one_minute_bars": "1m bars", "five_minute_bars": "5m bars",
+                    "last_evaluated_at": "Last evaluation", "rejection_reason": "Scanner status / rejection",
+                })
+                streamlit_ui.dataframe(scanner_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No per-stock scanner diagnostics yet. Check worker logs for watchlist or subscription errors.")
+
+    with outcomes_tab:
+        st.subheader("Today's resolved setups")
+        outcome_cols = ["resolved_at", "symbol", "entry_price", "stop_loss", "target_price", "result_price", "total_score"]
+        left, right = streamlit_ui.columns(2)
+        for col, title, rows, label in [
+            (left, "Target reached", target_rows, "Hit bar close"),
+            (right, "Stop reached", stop_rows, "Hit bar close"),
+        ]:
+            with col:
+                st.markdown(f"**{title} · {len(rows)}**")
+                if rows:
+                    frame = pd.DataFrame(rows)
+                    frame = frame[[c for c in outcome_cols if c in frame.columns]].rename(columns={
+                        "resolved_at": "Resolved (UTC)", "symbol": "Ticker", "entry_price": "Entry",
+                        "stop_loss": "Stop", "target_price": "Target", "result_price": label, "total_score": "Score",
+                    })
+                    streamlit_ui.dataframe(frame, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No outcomes in this category today.")
+        st.markdown("**Expired setups**")
+        if expired_rows:
+            expired_df = pd.DataFrame(expired_rows)
+            cols = ["resolved_at", "symbol", "entry_price", "stop_loss", "target_price", "expected_holding_minutes", "total_score"]
+            expired_df = expired_df[[c for c in cols if c in expired_df.columns]].rename(columns={
+                "resolved_at": "Expired (UTC)", "symbol": "Ticker", "entry_price": "Entry",
+                "stop_loss": "Stop", "target_price": "Target", "expected_holding_minutes": "Est. hold (min)",
                 "total_score": "Score",
             })
             streamlit_ui.dataframe(expired_df, use_container_width=True, hide_index=True)
         else:
-            st.info("No equity signals have expired.")
+            st.caption("No setups have expired today.")
 
-        st.subheader("Recent Candlestick Patterns (optional)")
-        pattern_df = pd.DataFrame(list_recent_equity_patterns(100))
-        if not pattern_df.empty:
-            pattern_cols = ["timestamp", "symbol", "timeframe", "pattern_names"]
-            pattern_df = pattern_df[
-                [column for column in pattern_cols if column in pattern_df.columns]
-            ].rename(columns={
-                "timestamp": "Candle time",
-                "pattern_names": "Detected patterns",
-            })
-            streamlit_ui.dataframe(pattern_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("No candlestick patterns detected in stored equity candles yet.")
-        st.caption(
-            "Supporting information only: patterns add at most one optional score point and never block or trigger a BUY."
-        )
-
+        st.divider()
+        st.subheader("Forward outcome quality")
         cost_bps = float(streamlit_ui.number_input(
-            "Illustrative all-in round-trip cost (basis points of entry value)",
-            min_value=0.0,
-            max_value=1000.0,
-            value=25.0,
-            step=5.0,
-            key="equity_round_trip_cost_bps",
+            "Illustrative round-trip trading cost (bps)", min_value=0.0, max_value=1000.0,
+            value=25.0, step=5.0, key="equity_round_trip_cost_bps",
+            help="Change this to approximate your brokerage, taxes, and slippage. It is not a broker quote.",
         ))
-        equity_performance = equity_signal_performance(cost_bps)
-        accuracy = equity_performance["accuracy_percent"]
-        summary_df = pd.DataFrame([
-            {"Metric": "Open BUY setups", "Value": str(equity_performance["open_signals"])},
-            {"Metric": "Target-hit signals", "Value": str(equity_performance["target_hits"])},
-            {"Metric": "Stop-loss signals", "Value": str(equity_performance["stop_hits"])},
-            {"Metric": "Ambiguous outcomes", "Value": str(equity_performance["ambiguous"])},
-            {"Metric": "Expired signals", "Value": str(equity_performance["expired"])},
-            {"Metric": "Resolved signals", "Value": str(equity_performance["resolved"])},
-            {"Metric": "Gross target-hit rate", "Value": f"{accuracy}%" if accuracy is not None else "N/A"},
-            {"Metric": "Net profitable outcome rate", "Value": f"{equity_performance['net_win_rate_percent']}%" if equity_performance["net_win_rate_percent"] is not None else "N/A"},
-            {"Metric": "Average net return", "Value": f"{equity_performance['net_average_return_percent']}%" if equity_performance["net_average_return_percent"] is not None else "N/A"},
-            {"Metric": "Net expectancy", "Value": f"{equity_performance['net_expectancy_r']} R" if equity_performance["net_expectancy_r"] is not None else "N/A"},
-            {"Metric": "Net profit factor", "Value": str(equity_performance["net_profit_factor"]) if equity_performance["net_profit_factor"] is not None else "N/A"},
-            {"Metric": "Outcomes priced", "Value": str(equity_performance["priced_outcomes"])},
-            {"Metric": "Assumed round-trip cost", "Value": f"{cost_bps:.1f} bps"},
-        ])
-        st.subheader("Forward Equity Outcome Summary")
-        streamlit_ui.dataframe(summary_df, use_container_width=True, hide_index=True)
+        outcome = equity_signal_performance(cost_bps)
+        metrics = [
+            ("Open setups", outcome["open_signals"]),
+            ("Resolved", outcome["resolved"]),
+            ("Ambiguous", outcome["ambiguous"]),
+            ("Expired", outcome["expired"]),
+            ("Gross target-hit rate", f"{outcome['accuracy_percent']}%" if outcome["accuracy_percent"] is not None else "—"),
+            ("Net profitable rate", f"{outcome['net_win_rate_percent']}%" if outcome["net_win_rate_percent"] is not None else "—"),
+            ("Average net return", f"{outcome['net_average_return_percent']}%" if outcome["net_average_return_percent"] is not None else "—"),
+            ("Net expectancy", f"{outcome['net_expectancy_r']} R" if outcome["net_expectancy_r"] is not None else "—"),
+            ("Net profit factor", outcome["net_profit_factor"] if outcome["net_profit_factor"] is not None else "—"),
+            ("Cost assumption", f"{cost_bps:.1f} bps"),
+        ]
+        for offset in range(0, len(metrics), 5):
+            cols = streamlit_ui.columns(5)
+            for col, (label, value) in zip(cols, metrics[offset:offset + 5]):
+                col.metric(label, value)
         st.caption(
-            "These are forward outcomes from live scanner signals, not a historical backtest. "
-            "The calculation assumes fills at target or stop levels and subtracts the selected round-trip cost "
-            "from entry notional; gaps through levels, liquidity, and broker-specific fees are not modeled."
+            "Forward scanner outcomes, not a historical backtest. Assumes fills at target or stop levels and subtracts "
+            "the selected cost from entry notional; price gaps, liquidity, and broker-specific charges are not modeled. "
+            "Target-hit rate excludes ambiguous, expired, and open setups."
         )
-        st.caption(
-            "Gross target-hit rate = target hits / (target hits + stop hits). "
-            "Ambiguous, expired, and open signals are excluded."
-        )
-        render_equity_evidence(list_equity_signals(limit=25))
-        st.caption(f"Watchlist: {settings.equity_watchlist_path}")
-    else:
-        st.info("Equity scanning is disabled. Set EQUITY_SCAN_ENABLED=true to enable it.")
+
+    with evidence_tab:
+        st.subheader("Signal evidence trail")
+        st.caption("Open a signal to inspect the checks and source articles captured when it was evaluated.")
+        render_equity_evidence(list_equity_signals(limit=50))
+        with st.expander("Optional candle pattern context", expanded=False):
+            pattern_rows = list_recent_equity_patterns(100)
+            if pattern_rows:
+                pattern_df = pd.DataFrame(pattern_rows)
+                cols = ["timestamp", "symbol", "timeframe", "pattern_names"]
+                pattern_df = pattern_df[[c for c in cols if c in pattern_df.columns]].rename(columns={
+                    "timestamp": "Candle time", "symbol": "Ticker", "timeframe": "Timeframe",
+                    "pattern_names": "Detected patterns",
+                })
+                streamlit_ui.dataframe(pattern_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No candlestick patterns detected in stored equity candles yet.")
+            st.caption("Patterns provide supporting context only. They never block or trigger an equity BUY.")
+
+    with quality_tab:
+        st.subheader("Research model learning status")
+        report_path = Path("data/equity_live_learning_report.json")
+        if report_path.exists():
+            try:
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                holdout = report.get("holdout") or {}
+                status_col, resolved_col, changed_col = streamlit_ui.columns(3)
+                status_col.metric("Status", str(report.get("status", "UNKNOWN")))
+                resolved_col.metric("Resolved samples", int(report.get("resolved_samples", 0)))
+                changed_col.metric("Active model changed", "Yes" if report.get("active_model_changed") else "No")
+                if holdout:
+                    st.markdown("**Chronological holdout**")
+                    hcols = streamlit_ui.columns(3)
+                    hcols[0].metric("Samples", holdout.get("samples", 0))
+                    hcols[1].metric("Win rate", f"{holdout.get('win_rate_pct', 'N/A')}%")
+                    hcols[2].metric("Brier improvement vs baseline", holdout.get("brier_improvement_vs_baseline", "N/A"))
+                    st.caption("Holdout results are reported for monitoring; learning does not silently change live signal thresholds.")
+            except (OSError, ValueError, TypeError) as exc:
+                st.warning(f"Could not read the equity learning report: {exc}")
+        else:
+            st.info("No learning report yet. Evaluation needs at least 100 resolved equity target/stop outcomes with feature snapshots.")
+        st.subheader("Scanner coverage")
+        if scanner_rows:
+            st.metric("Stocks evaluated", len(scanner_rows))
+            status_counts = pd.DataFrame(scanner_rows)
+            if "rejection_reason" in status_counts:
+                summary = status_counts["rejection_reason"].fillna("Eligible / no rejection").value_counts().rename_axis("Status").reset_index(name="Stocks")
+                streamlit_ui.dataframe(summary, use_container_width=True, hide_index=True)
+        else:
+            st.info("No scanner diagnostics are available yet.")
+        st.caption(f"Configured equity watchlist: {settings.equity_watchlist_path}")
 
 
 @st.fragment(run_every=settings.news_refresh_seconds)
