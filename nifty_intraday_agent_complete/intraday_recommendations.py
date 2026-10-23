@@ -220,16 +220,24 @@ def collect_intraday_recommendations(
     for item in _source_items():
         title = item["title"]
         body = f"{title} {item['summary']}"
-        if not _RECOMMENDATION_TERMS.search(body):
-            continue
         epoch = item.get("published_epoch")
-        if not epoch or datetime.fromtimestamp(float(epoch), tz).date() != today:
+        if not epoch:
+            continue
+        if datetime.fromtimestamp(float(epoch), tz).date() != today:
+            continue
+        query = str(item.get("query") or "").casefold()
+        has_buy, has_sell = bool(_BUY.search(body)), bool(_SELL.search(body))
+        if "stocks to buy today" in query or "stocks to buy today" in body:
+            side = "BUY" if has_buy or not has_sell else "SELL"
+        elif "stocks to sell today" in query or "stocks to sell today" in body:
+            side = "SELL"
+        else:
+            side = "MIXED" if has_buy and has_sell else "BUY" if has_buy else "SELL" if has_sell else "UNSPECIFIED"
+        if side != "BUY":
             continue
         matches = {symbol for symbol, pattern in symbol_patterns if pattern.search(body)}
         if not matches:
             continue
-        has_buy, has_sell = bool(_BUY.search(body)), bool(_SELL.search(body))
-        side = "MIXED" if has_buy and has_sell else "BUY" if has_buy else "SELL" if has_sell else "UNSPECIFIED"
         brokerage = next((canonical for canonical, aliases in BROKER_ALIASES.items()
                           if any(alias.casefold() in body.casefold() for alias in aliases)), "")
         publisher = item.get("publisher") or urlparse(item.get("url", "")).hostname or "Google News result"
