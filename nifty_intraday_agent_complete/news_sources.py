@@ -256,6 +256,7 @@ def fetch_feed(source: str, url: str, limit: int = 30) -> list[NewsItem]:
             score, bias = classify_market_context(title + " " + summary, score)
         items.append({
             "source": source,
+            "author": entry.get("author") or entry.get("dc_creator"),
             "title": title,
             "summary": summary.strip(),
             "url": entry.get("link"),
