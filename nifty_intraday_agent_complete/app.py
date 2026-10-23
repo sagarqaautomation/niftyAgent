@@ -507,7 +507,53 @@ def render_equities() -> None:
 
         recommendations = intraday["recommendations"]
         common = intraday["common"]
-        news_matches = [row for row in recommendations if row["in_latest_news"]]
+        live_prices = {
+            str(row.get("symbol", "")).upper(): row
+            for row in scanner_rows
+        }
+        display_recommendations = []
+        for source_row in recommendations:
+            row = dict(source_row)
+            live_row = live_prices.get(str(row.get("symbol", "")).upper(), {})
+            row["cmp_price"] = live_row.get("last_price") or row.get("cmp_price")
+            row["price_as_of"] = live_row.get("last_tick_at")
+            entry_low, entry_high = row.get("entry_low"), row.get("entry_high")
+            row["entry_zone_display"] = (
+                f"₹{entry_low:,.2f} to ₹{entry_high:,.2f}"
+                if entry_low is not None and entry_high is not None and entry_low != entry_high
+                else f"₹{entry_low:,.2f}" if entry_low is not None else "Not stated"
+            )
+            for source_key, display_key in (
+                ("cmp_price", "cmp_display"), ("target_1", "target_1_display"),
+                ("target_2", "target_2_display"), ("stop_loss", "stop_display"),
+            ):
+                value = row.get(source_key)
+                row[display_key] = f"₹{float(value):,.2f}" if value is not None else "Not stated"
+            row["exit_display"] = row.get("exit_by") or "Not stated"
+            row["catalyst_display"] = row.get("catalyst") or row.get("title") or "Not stated"
+            row["broker_display"] = row.get("broker") or "Not named"
+            display_recommendations.append(row)
+        news_matches = [row for row in display_recommendations if row["in_latest_news"]]
+        display_columns = {
+            "symbol": "Stock", "cmp_display": "CMP (live)", "entry_zone_display": "Entry Zone",
+            "target_1_display": "Target 1", "target_2_display": "Target 2",
+            "stop_display": "Stop-Loss", "exit_display": "Exit By",
+            "catalyst_display": "Catalyst", "side": "View", "broker_display": "Broker",
+            "price_as_of": "Price as of", "url": "Source",
+        }
+        visible_intraday_columns = list(display_columns)
+        def render_intraday_table(rows: list[dict[str, Any]]) -> None:
+            if not rows:
+                return
+            table = pd.DataFrame(rows)
+            keep = [column for column in visible_intraday_columns if column in table.columns]
+            table = table[keep].rename(columns=display_columns)
+            streamlit_ui.dataframe(
+                table, use_container_width=True, hide_index=True,
+                column_config={"Source": streamlit_ui.column_config.LinkColumn(
+                    "Source", display_text="Open"
+                )},
+            )
         kpis = streamlit_ui.columns(3)
         kpis[0].metric("Same-day articles matched", len(recommendations))
         kpis[1].metric("Stocks named by 2+ brokers", len(common))
@@ -529,38 +575,13 @@ def render_equities() -> None:
 
         with st.expander("Broker recommendations also mentioned in latest news", expanded=True):
             if news_matches:
-                latest_df = pd.DataFrame(news_matches)
-                latest_df = latest_df[[
-                    "symbol", "side", "broker", "publisher", "published_at", "title", "url"
-                ]].rename(columns={
-                    "symbol": "Ticker", "side": "Reported view", "broker": "Named broker",
-                    "publisher": "Article publisher", "published_at": "Published",
-                    "title": "Article",
-                })
-                streamlit_ui.dataframe(
-                    latest_df, use_container_width=True, hide_index=True,
-                    column_config={"url": streamlit_ui.column_config.LinkColumn(
-                        "Source link", display_text="Open"
-                    )},
-                )
+                render_intraday_table(news_matches)
             else:
                 st.info("No matched same-day recommendation ticker also appears in today's company-news feed.")
 
-        st.subheader("All matched same-day recommendation articles")
-        if recommendations:
-            rec_df = pd.DataFrame(recommendations)[[
-                "symbol", "side", "broker", "publisher", "published_at", "title", "url"
-            ]].rename(columns={
-                "symbol": "Ticker", "side": "Reported view", "broker": "Named broker",
-                "publisher": "Article publisher", "published_at": "Published",
-                "title": "Article",
-            })
-            streamlit_ui.dataframe(
-                rec_df, use_container_width=True, hide_index=True,
-                column_config={"url": streamlit_ui.column_config.LinkColumn(
-                    "Source link", display_text="Open"
-                )},
-            )
+        st.subheader("Today’s intraday stocks")
+        if display_recommendations:
+            render_intraday_table(display_recommendations)
         else:
             st.info(
                 "No same-day articles matched the intraday recommendation terms and a known NSE company or ticker. "
