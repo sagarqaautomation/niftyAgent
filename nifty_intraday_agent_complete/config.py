@@ -23,7 +23,7 @@ class Settings:
     reward_risk: float = float(os.getenv("REWARD_RISK", "1.6"))
     signal_expiry_minutes: int = int(os.getenv("SIGNAL_EXPIRY_MINUTES", "30"))
     news_enabled: bool = env_bool("NEWS_ENABLED", True)
-    news_refresh_seconds: int = int(os.getenv("NEWS_REFRESH_SECONDS", "120"))
+    news_refresh_seconds: int = int(os.getenv("NEWS_REFRESH_SECONDS", "30"))
     kite_api_key: str = os.getenv("KITE_API_KEY", "")
     kite_api_secret: str = os.getenv("KITE_API_SECRET", "")
     kite_access_token: str = os.getenv("KITE_ACCESS_TOKEN", "")
