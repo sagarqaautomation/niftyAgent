@@ -452,7 +452,7 @@ def render_equities() -> None:
 
     with overview_tab:
         st.subheader("Research pipeline")
-        st.caption("Candidates need supportive research and live confirmation before becoming a BUY setup.")
+        st.caption("Stocks are scanned from Kite live prices and candles. News and research add context but do not gate technical setups.")
         if candidates:
             candidate_df = pd.DataFrame(candidates)
             candidate_cols = [
@@ -477,9 +477,9 @@ def render_equities() -> None:
         st.subheader("How an equity setup is confirmed")
         flow_cols = streamlit_ui.columns(4)
         flow = [
-            ("01 · Discover", "Company news and explicit analyst calls"),
-            ("02 · Research", "Catalyst, fundamentals, valuation, and risk"),
-            ("03 · Confirm", "Live price, volume, and market context"),
+            ("01 · Scan", "Kite live prices, volume, and candles"),
+            ("02 · Filter", "Trend, momentum, liquidity, and reward/risk"),
+            ("03 · Add context", "News and research are optional evidence"),
             ("04 · Track", "Entry, stop, target, and outcome evidence"),
         ]
         for col, (heading, detail) in zip(flow_cols, flow):
@@ -488,7 +488,47 @@ def render_equities() -> None:
                 st.caption(detail)
 
     with intraday_tab:
-        st.subheader("Today's broker intraday ideas")
+        st.subheader("Kite technical scan")
+        st.caption(
+            "Live technical setups are generated from Kite prices, volume, and candles for the configured NSE watchlist "
+            "plus any enabled discovered symbols. Google News is not required to find or confirm these setups."
+        )
+        st.metric("Kite-confirmed BUY setups", len(open_rows))
+        if open_rows:
+            technical_df = pd.DataFrame(open_rows)
+            technical_columns = [
+                "symbol", "entry_price", "target_price", "stop_loss", "reward_risk",
+                "total_score", "created_at", "reason",
+            ]
+            technical_df = technical_df[[column for column in technical_columns if column in technical_df.columns]].rename(columns={
+                "symbol": "Stock", "entry_price": "Entry", "target_price": "Target",
+                "stop_loss": "Stop-loss", "reward_risk": "Reward / risk",
+                "total_score": "Technical score", "created_at": "Setup time (UTC)",
+                "reason": "Technical basis",
+            })
+            streamlit_ui.dataframe(technical_df, use_container_width=True, hide_index=True)
+        else:
+            st.info(
+                "No Kite technical setup has passed live confirmation yet. The configured stock universe is still scanned; "
+                "see scan coverage below for the latest prices and rejection reasons."
+            )
+        with st.expander("Kite scan coverage", expanded=False):
+            if scanner_rows:
+                coverage_df = pd.DataFrame(scanner_rows)
+                coverage_columns = [
+                    "symbol", "last_price", "last_tick_at", "one_minute_bars",
+                    "five_minute_bars", "last_evaluated_at", "rejection_reason",
+                ]
+                coverage_df = coverage_df[[column for column in coverage_columns if column in coverage_df.columns]].rename(columns={
+                    "symbol": "Stock", "last_price": "Latest price", "last_tick_at": "Last Kite tick",
+                    "one_minute_bars": "1m bars", "five_minute_bars": "5m bars",
+                    "last_evaluated_at": "Last evaluation", "rejection_reason": "Scanner result",
+                })
+                streamlit_ui.dataframe(coverage_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No Kite scan diagnostics are available yet. Confirm the live feed and watchlist configuration.")
+        st.divider()
+        st.subheader("Broker intraday ideas (optional news context)")
         st.caption(
             "Same-day public recommendation articles discovered through Google News RSS. "
             "Broker overlap counts only brokerages explicitly named in the article. "
@@ -570,8 +610,7 @@ def render_equities() -> None:
             render_intraday_table(display_recommendations)
         else:
             st.info(
-                "No same-day BUY article matched a stock or company name in the NSE instrument list. "
-                "Check the linked Google News query if it already shows a call that is missing here."
+                "No same-day BUY article matched a stock in the instrument list. The Kite technical scan above works independently of these articles."
             )
         st.caption(
             "Google News RSS is refreshed at most every 5 minutes. The article publisher is shown separately from "
@@ -588,7 +627,7 @@ def render_equities() -> None:
 
     with setups_tab:
         st.subheader("Open BUY setups")
-        st.caption("Use entry, stop, target, and research basis together. Holding-time estimates are extrapolations, not forecasts.")
+        st.caption("These setups passed the Kite-based technical and risk filters. News or research may be available as optional context; holding-time estimates are extrapolations.")
         if open_rows:
             open_df = add_research_columns(pd.DataFrame(open_rows))
             cols = [

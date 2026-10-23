@@ -31,10 +31,10 @@ class Settings:
     nifty_future_instrument_token: str = os.getenv("NIFTY_FUTURE_INSTRUMENT_TOKEN", "")
     kite_instruments_csv: str = os.getenv("KITE_INSTRUMENTS_CSV", "data/instruments.csv")
     equity_scan_enabled: bool = env_bool("EQUITY_SCAN_ENABLED", True)
-    # Only scan stocks with a fresh positive news/analyst catalyst.
-    equity_news_first: bool = env_bool("EQUITY_NEWS_FIRST", True)
-    # With news-first on, stocks outside the watchlist that get a positive
-    # company catalyst are subscribed and scanned for the rest of the session.
+    # Legacy environment setting retained for compatibility; it no longer gates
+    # Kite technical scanning. News is optional context.
+    equity_news_first: bool = env_bool("EQUITY_NEWS_FIRST", False)
+    # Stocks outside the watchlist may be added after a positive company catalyst.
     equity_discovery_enabled: bool = env_bool("EQUITY_DISCOVERY_ENABLED", True)
     equity_discovery_max_additions: int = max(0, int(os.getenv("EQUITY_DISCOVERY_MAX_ADDITIONS", "40")))
     equity_watchlist_path: str = os.getenv(

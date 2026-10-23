@@ -548,7 +548,7 @@ def main() -> None:
                     company_name = str(instrument.get("name", "")).strip()
                     if company_name:
                         equity_news_aliases[symbol].append(company_name)
-                if settings.equity_discovery_enabled and settings.equity_news_first:
+                if settings.equity_discovery_enabled:
                     discovery_tokens, discovery_names = build_discovery_universe(
                         equity_instruments, exclude=equity_news_aliases
                     )
@@ -1110,53 +1110,26 @@ def main() -> None:
                             flush=True,
                         )
 
-                with premarket_lock:
-                    current_premarket_context = dict(premarket_context_state)
-                if settings.equity_news_first:
-                    if candidate_state["source"] is not news_items and not candidate_state["running"]:
-                        candidate_state["source"] = news_items
-                        candidate_state["running"] = True
-                        threading.Thread(
-                            target=refresh_equity_candidates,
-                            args=(list(news_items),),
-                            name="equity-candidates",
-                            daemon=True,
-                        ).start()
-                    candidate_state["prices"][equity_symbol] = float(equity_price)
-                    if equity_symbol not in candidate_state["symbols"]:
-                        active_equity_setups.discard(equity_symbol)
-                        update_equity_scan_status(
-                            equity_symbol,
-                            instrument_token=int(tick_token) if tick_token is not None else None,
-                            last_price=float(equity_price),
-                            last_tick_at=equity_time.isoformat(),
-                            one_minute_bars=int(len(equity_frames["1min"])),
-                            five_minute_bars=int(len(equity_frames["5min"])),
-                            last_evaluated_at=utc_now(),
-                            rejection_reason="No fresh news or analyst catalyst",
-                        )
-                        continue
+                # Refresh research and news-discovered symbols as optional context.
+                # Kite technical evaluation below always runs for subscribed stocks.
+                if candidate_state["source"] is not news_items and not candidate_state["running"]:
+                    candidate_state["source"] = news_items
+                    candidate_state["running"] = True
+                    threading.Thread(
+                        target=refresh_equity_candidates,
+                        args=(list(news_items),),
+                        name="equity-candidates",
+                        daemon=True,
+                    ).start()
                 scanner_diagnostic: dict[str, Any] = {}
                 equity_signal = build_equity_buy_signal(
                     equity_symbol,
                     equity_frames,
                     float(equity_price),
-                    equity_news_bias(
-                        news_items,
-                        equity_symbol,
-                        equity_news_aliases.get(equity_symbol, [equity_symbol]),
-                        quality.news_max_age_minutes,
-                    ),
-                    premarket_context=current_premarket_context,
+                    "NEUTRAL",
+                    premarket_context=None,
                     diagnostics=scanner_diagnostic,
                     live_price_time=equity_time.isoformat(),
-                    research_provider=lambda px, _s=equity_symbol: build_equity_research(
-                        _s,
-                        news_items,
-                        equity_news_aliases.get(_s, [_s]),
-                        px,
-                        news_key=discovery_names.get(_s),
-                    ),
                 )
                 equity_one_minute_bars = int(len(equity_frames["1min"]))
                 equity_five_minute_bars = int(len(equity_frames["5min"]))
