@@ -8,6 +8,7 @@ from news_sources import (
     classify,
     classify_categories,
     classify_market_context,
+    extract_analyst_recommendation,
     equity_news_bias,
     tag_news_symbols,
 )
@@ -22,6 +23,26 @@ class NewsSourcesTests(unittest.TestCase):
         self.assertIn("CNBC World", SOURCES)
         self.assertIn("CNBC Markets", SOURCES)
         self.assertIn("BBC Business", SOURCES)
+        self.assertIn("CNBC TV18 Market", SOURCES)
+        self.assertIn("CNBC TV18 Latest News", SOURCES)
+
+    def test_analyst_recommendation_requires_explicit_call_language(self) -> None:
+        self.assertEqual(
+            extract_analyst_recommendation("Brokerage upgrades Infosys to Buy"),
+            "BUY",
+        )
+        self.assertEqual(
+            extract_analyst_recommendation("Analyst maintains a Hold rating"),
+            "HOLD",
+        )
+        self.assertEqual(
+            extract_analyst_recommendation("Analysts discuss Infosys at conference"),
+            None,
+        )
+        self.assertEqual(
+            extract_analyst_recommendation("Analyst says Buy and another says Sell"),
+            "MIXED",
+        )
 
     def test_headlines_receive_multiple_event_categories(self) -> None:
         categories = classify_categories(
