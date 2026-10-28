@@ -9,3 +9,18 @@ services:
       - ./logs:/app/logs
     ports:
       - "8000:8000"
+
+  # Optional AI gateway, isolated on the Compose network (not exposed to the public host).
+  omniroute:
+    image: diegosouzapw/omniroute:3.8.53
+    restart: unless-stopped
+    stop_grace_period: 40s
+    environment:
+      PORT: "20128"
+    volumes:
+      - omniroute-data:/app/data
+    expose:
+      - "20128"
+
+volumes:
+  omniroute-data:
