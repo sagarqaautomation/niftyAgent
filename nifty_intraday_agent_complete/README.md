@@ -654,3 +654,52 @@ The live worker persists point-in-time feature snapshots with NIFTY CALL/PUT ale
 - The app must be running with live market data and using the same persistent SQLite database for resolved live outcomes to accumulate. GitHub Actions report jobs do not share this local database.
 
 **Safety:** the candidate is not automatically promoted and is not connected to live signal decisions. It is not the same schema as the optional `TRADE_QUALITY_MODEL_PATH` veto model. Do not point that setting at the research candidate. Keep `AUTO_ORDER_PLACEMENT=false`; no orders are placed by this learning loop.
+
+
+## Optional OmniRoute multi-model gateway (v2.1 integration branch)
+
+OmniRoute is an optional OpenAI-compatible gateway. It is not a market-prediction model. This integration does not change `signal_engine.py`, create CALL/PUT signals, place orders, or alter the existing walk-forward backtester. It is a separate adapter for future research/explanation workflows.
+
+### Start services
+
+From `nifty_intraday_agent_complete/` on a host with Docker Compose:
+
+```bash
+docker compose up -d --build
+```
+
+OmniRoute is attached to the private Compose network and is not published on the host. The image tag is pinned; review upstream release notes before updating it. Persistent gateway state is stored in the `omniroute-data` named volume.
+
+1. Open the OmniRoute dashboard through a temporary, controlled local port-forward or a private administrative route. Do not expose the dashboard or API directly to the public internet without authentication and TLS.
+2. Connect/configure eligible model providers in OmniRoute and confirm the intended routing policy. The `auto` model requires at least one eligible configured route.
+3. Create/copy an OmniRoute API key from Dashboard → Endpoints and set it as `OMNIROUTE_API_KEY` in the NiftyAgent `.env` file.
+4. Keep `OMNIROUTE_ENABLED=false` until the gateway has been configured and the offline tests pass. Enable only for an explicitly opted-in research/explanation call site.
+5. Restart the NiftyAgent container after changing environment variables.
+
+### Model fallback behavior
+
+`llm/omniroute_client.py` calls the configured primary model (default `auto`) and then the optional explicit `OMNIROUTE_FALLBACK_MODEL` if the first request fails or returns empty text. If both fail, it returns `None` and logs only the error type/model—not credentials or prompts. The caller must treat `None` as "AI unavailable" and continue without AI. Do not use an LLM result as a replacement for deterministic signal checks.
+
+### Configuration
+
+```env
+OMNIROUTE_ENABLED=false
+OMNIROUTE_BASE_URL=http://omniroute:20128/v1
+OMNIROUTE_API_KEY=
+OMNIROUTE_MODEL=auto
+OMNIROUTE_FALLBACK_MODEL=
+OMNIROUTE_TIMEOUT_SECONDS=10
+PAPER_TRADING=true
+AUTO_ORDER_PLACEMENT=false
+```
+
+### Offline tests and backtest
+
+Run from `nifty_intraday_agent_complete/`:
+
+```bash
+python -m unittest discover -s tests -v
+python backtester.py data/nifty_1m.csv --walk-forward --folds 5 --progress
+```
+
+The unit tests mock model calls and require no provider credentials. The backtest evaluates the existing deterministic engine; it does not claim any performance improvement from OmniRoute because the adapter is intentionally not wired into the signal engine. Compare baseline metrics with the same data, folds, and transaction-cost assumptions. Keep `PAPER_TRADING=true` and `AUTO_ORDER_PLACEMENT=false`.

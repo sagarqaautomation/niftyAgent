@@ -58,5 +58,12 @@ class Settings:
     live_market_data: bool = env_bool("LIVE_MARKET_DATA", False)
     paper_trading: bool = env_bool("PAPER_TRADING", True)
     auto_order_placement: bool = env_bool("AUTO_ORDER_PLACEMENT", False)
+    # Optional OmniRoute LLM gateway. Disabled by default; never part of signal generation.
+    omniroute_enabled: bool = env_bool("OMNIROUTE_ENABLED", False)
+    omniroute_base_url: str = os.getenv("OMNIROUTE_BASE_URL", "http://omniroute:20128/v1")
+    omniroute_api_key: str = os.getenv("OMNIROUTE_API_KEY", "")
+    omniroute_model: str = os.getenv("OMNIROUTE_MODEL", "auto")
+    omniroute_fallback_model: str = os.getenv("OMNIROUTE_FALLBACK_MODEL", "")
+    omniroute_timeout_seconds: float = max(1.0, float(os.getenv("OMNIROUTE_TIMEOUT_SECONDS", "10")))
 
 settings = Settings()
