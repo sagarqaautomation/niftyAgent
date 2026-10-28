@@ -16,10 +16,14 @@ No order placement is implemented here.
 from collections.abc import Callable, Sequence
 from datetime import date, datetime
 from threading import RLock
+import time
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
+import requests
+
 from config import settings
+from kite_auth_store import load_access_token
 
 try:
     from kiteconnect import KiteTicker as _KiteTicker, KiteConnect as _KiteConnect  # type: ignore[reportMissingTypeStubs]
@@ -33,6 +37,7 @@ except ImportError:
 Tick = dict[str, Any]
 TickCallback = Callable[[Sequence[Tick]], None]
 StatusCallback = Callable[[str, str | None], None]
+INSTRUMENT_DOWNLOAD_ATTEMPTS = 3
 
 class KiteMarketData:
     def __init__(self):
@@ -41,6 +46,7 @@ class KiteMarketData:
         self.callback: TickCallback | None = None
         self.status_callback: StatusCallback | None = None
         self.instrument_tokens: list[int] = []
+        self.full_mode_tokens: list[int] = []
         self.http_lock = RLock()
 
     def connect(self) -> "KiteMarketData":
@@ -48,18 +54,29 @@ class KiteMarketData:
             raise RuntimeError("kiteconnect package is not installed")
         if not settings.kite_api_key:
             raise RuntimeError("KITE_API_KEY is missing in .env")
-        if not settings.kite_access_token:
+        access_token = load_access_token()
+        if not access_token:
             raise RuntimeError(
-                "KITE_ACCESS_TOKEN is missing. Complete the current Kite authentication flow first."
+                "Kite access token is missing. Open the backend /kite/login URL and complete Kite login."
             )
 
-        kite = KiteConnect(api_key=settings.kite_api_key)
-        kite.set_access_token(settings.kite_access_token)
+        # Bound REST calls so a stalled historical-data request cannot block
+        # startup indefinitely before the WebSocket is started.
+        kite = KiteConnect(api_key=settings.kite_api_key, timeout=10)
+        kite.set_access_token(access_token)
+        # Verify that the API key/access token pair is accepted before
+        # reporting authentication success in the dashboard.
+        kite.profile()
         self.kite = kite
 
+        # Enable bounded automatic reconnection for transient network drops.
+        # The dashboard reports RECONNECTING until on_connect confirms recovery.
         self.ticker = KiteTicker(
             settings.kite_api_key,
-            settings.kite_access_token
+            access_token,
+            reconnect=True,
+            reconnect_max_tries=50,
+            reconnect_max_delay=60,
         )
 
         return self
@@ -72,14 +89,27 @@ class KiteMarketData:
 
         def on_ticks(_ws: Any, ticks: Sequence[Tick]) -> None:
             if self.callback:
-                self.callback(ticks)
+                try:
+                    self.callback(ticks)
+                except Exception as exc:
+                    # An uncaught error here makes Twisted drop the WebSocket.
+                    print(f"Tick handler error: {type(exc).__name__}: {exc}", flush=True)
 
         def on_connect(ws: Any, _response: Any) -> None:
             if self.instrument_tokens:
                 ws.subscribe(self.instrument_tokens)
-                ws.set_mode(ws.MODE_FULL, self.instrument_tokens)
+                full = set(self.full_mode_tokens)
+                quote_only = [t for t in self.instrument_tokens if t not in full]
+                if quote_only:
+                    ws.set_mode(ws.MODE_QUOTE, quote_only)
+                if full:
+                    ws.set_mode(ws.MODE_FULL, [t for t in self.instrument_tokens if t in full])
                 if settings.nifty_instrument_token:
                     ws.set_mode(ws.MODE_LTP, [int(settings.nifty_instrument_token)])
+            print(
+                f"Kite WebSocket connected; subscribed to {len(self.instrument_tokens)} instruments.",
+                flush=True,
+            )
             self._report_status("CONNECTED")
 
         def on_close(
@@ -87,21 +117,41 @@ class KiteMarketData:
             code: int | str | None,
             reason: str | None,
         ) -> None:
-            print("Kite WebSocket closed:", code, reason)
-            self._report_status("DISCONNECTED", f"{code}: {reason}")
+            print("Kite WebSocket closed:", code, reason, flush=True)
+            # KiteTicker's reconnect loop is enabled in the constructor above.
+            self._report_status(
+                "RECONNECTING",
+                f"WebSocket closed ({code}: {reason}); KiteTicker will attempt to reconnect.",
+            )
 
         def on_error(
             _ws: Any,
             code: int | str | None,
             reason: str | None,
         ) -> None:
-            print("Kite WebSocket error:", code, reason)
-            self._report_status("ERROR", f"{code}: {reason}")
+            detail = f"{code}: {reason}"
+            print("Kite WebSocket error:", detail, flush=True)
+            self._report_status("ERROR", detail)
+
+        def on_reconnect(_ws: Any, attempts_count: int) -> None:
+            detail = f"KiteTicker reconnect attempt {attempts_count}/50."
+            print(detail, flush=True)
+            self._report_status("RECONNECTING", detail)
+
+        def on_noreconnect(_ws: Any) -> None:
+            detail = (
+                "KiteTicker exhausted its automatic reconnect attempts. "
+                "Check the worker log, network, and Kite session; restart the worker after resolving the cause."
+            )
+            print(detail, flush=True)
+            self._report_status("ERROR", detail)
 
         ticker.on_ticks = on_ticks
         ticker.on_connect = on_connect
         ticker.on_close = on_close
         ticker.on_error = on_error
+        ticker.on_reconnect = on_reconnect
+        ticker.on_noreconnect = on_noreconnect
 
     def on_status(self, callback: StatusCallback) -> None:
         self.status_callback = callback
@@ -116,6 +166,22 @@ class KiteMarketData:
         tokens = [int(x) for x in instrument_tokens]
         self.ticker.subscribe(tokens)
         self.ticker.set_mode(self.ticker.MODE_FULL, tokens)
+
+    def add_instrument_tokens(self, instrument_tokens: Sequence[int]) -> None:
+        """Subscribe extra tokens (QUOTE mode) while running. They are also
+        remembered so a reconnect resubscribes them."""
+        new = [
+            int(t) for t in dict.fromkeys(instrument_tokens)
+            if int(t) not in self.instrument_tokens
+        ]
+        if not new:
+            return
+        self.instrument_tokens.extend(new)
+        ticker = self.ticker
+        # While disconnected, on_connect subscribes the updated token list.
+        if ticker is not None and ticker.is_connected():
+            ticker.subscribe(new)
+            ticker.set_mode(ticker.MODE_QUOTE, new)
 
     def historical_data(
         self,
@@ -151,8 +217,18 @@ class KiteMarketData:
             result = self.kite.quote(list(instruments))
         return cast(dict[str, dict[str, Any]], result)
 
-    def set_instrument_tokens(self, instrument_tokens: Sequence[int]) -> None:
+    def set_instrument_tokens(
+        self,
+        instrument_tokens: Sequence[int],
+        full_mode_tokens: Sequence[int] | None = None,
+    ) -> None:
         self.instrument_tokens = list(dict.fromkeys(int(token) for token in instrument_tokens))
+        # Tokens outside this set use the smaller QUOTE packets (price+volume,
+        # no market depth), which keeps a large watchlist cheap to parse.
+        self.full_mode_tokens = (
+            list(dict.fromkeys(int(token) for token in full_mode_tokens))
+            if full_mode_tokens is not None else list(self.instrument_tokens)
+        )
 
     def get_front_future(self, name: str = "NIFTY") -> dict[str, Any]:
         instruments = self.get_instruments("NFO")
@@ -191,4 +267,21 @@ class KiteMarketData:
     def get_instruments(self, exchange: str = "NFO") -> list[dict[str, Any]]:
         if not self.kite:
             raise RuntimeError("Call connect() first")
-        return cast(list[dict[str, Any]], self.kite.instruments(exchange))
+        for attempt in range(1, INSTRUMENT_DOWNLOAD_ATTEMPTS + 1):
+            try:
+                with self.http_lock:
+                    instruments = self.kite.instruments(exchange)
+                return cast(list[dict[str, Any]], instruments)
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                if attempt == INSTRUMENT_DOWNLOAD_ATTEMPTS:
+                    raise
+                delay_seconds = 2 ** (attempt - 1)
+                print(
+                    f"Kite {exchange} instrument request failed "
+                    f"({type(exc).__name__}); retrying "
+                    f"{attempt + 1}/{INSTRUMENT_DOWNLOAD_ATTEMPTS} "
+                    f"in {delay_seconds}s.",
+                    flush=True,
+                )
+                time.sleep(delay_seconds)
+        raise RuntimeError("Kite instrument download retry loop exhausted")

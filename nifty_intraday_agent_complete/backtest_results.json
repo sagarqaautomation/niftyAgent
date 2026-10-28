@@ -1,0 +1,525 @@
+[Fold 1/4] train=9,525 rows, validation=9,525 rows
+[Fold 1/4] Testing minimum technical score 7...
+[Fold 1/4] Score 7: 189 signals, 40.86% win rate, net PF 1.1055
+[Fold 1/4] Testing minimum technical score 8...
+[Fold 1/4] Score 8: 271 signals, 29.74% win rate, net PF 0.6772
+[Fold 1/4] Testing minimum technical score 9...
+[Fold 1/4] Score 9: 123 signals, 31.15% win rate, net PF 0.7238
+
+[Fold 2/4] train=19,050 rows, validation=9,525 rows
+[Fold 2/4] Testing minimum technical score 7...
+[Fold 2/4] Score 7: 192 signals, 47.28% win rate, net PF 1.4351
+[Fold 2/4] Testing minimum technical score 8...
+[Fold 2/4] Score 8: 255 signals, 43.8% win rate, net PF 1.2471
+[Fold 2/4] Testing minimum technical score 9...
+[Fold 2/4] Score 9: 101 signals, 34.65% win rate, net PF 0.8485
+
+[Fold 3/4] train=28,575 rows, validation=9,525 rows
+[Fold 3/4] Testing minimum technical score 7...
+[Fold 3/4] Score 7: 164 signals, 42.14% win rate, net PF 1.1652
+[Fold 3/4] Testing minimum technical score 8...
+[Fold 3/4] Score 8: 221 signals, 41.78% win rate, net PF 1.1484
+[Fold 3/4] Testing minimum technical score 9...
+[Fold 3/4] Score 9: 124 signals, 39.34% win rate, net PF 1.0378
+
+[Fold 4/4] train=38,100 rows, validation=9,525 rows
+[Fold 4/4] Testing minimum technical score 7...
+[Fold 4/4] Score 7: 191 signals, 40.0% win rate, net PF 1.0667
+[Fold 4/4] Testing minimum technical score 8...
+[Fold 4/4] Score 8: 256 signals, 45.82% win rate, net PF 1.3529
+[Fold 4/4] Testing minimum technical score 9...
+[Fold 4/4] Score 9: 105 signals, 45.71% win rate, net PF 1.3474
+[
+  {
+    "fold": 1,
+    "train_start": "2026-04-06T09:15:00+05:30",
+    "train_end": "2026-05-13T11:44:00+05:30",
+    "validation_start": "2026-05-13T11:45:00+05:30",
+    "validation_end": "2026-06-18T14:14:00+05:30",
+    "training_rows": 9525,
+    "round_trip_cost_points": 0.0,
+    "score_threshold_results": {
+      "7": {
+        "signals": 189,
+        "wins": 76,
+        "losses": 110,
+        "ambiguous": 0,
+        "expired": 3,
+        "resolved": 186,
+        "win_rate_percent": 40.86,
+        "average_r": 0.0624,
+        "profit_factor": 1.1055,
+        "round_trip_cost_points": 0.0,
+        "net_average_r": 0.0624,
+        "net_profit_factor": 1.1055,
+        "by_regime": {
+          "TRENDING": {
+            "signals": 81,
+            "wins": 38,
+            "losses": 41,
+            "ambiguous": 0,
+            "expired": 2,
+            "win_rate": 48.1
+          },
+          "TRANSITION": {
+            "signals": 76,
+            "wins": 29,
+            "losses": 46,
+            "ambiguous": 0,
+            "expired": 1,
+            "win_rate": 38.67
+          },
+          "RANGE": {
+            "signals": 32,
+            "wins": 9,
+            "losses": 23,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 28.12
+          }
+        }
+      },
+      "8": {
+        "signals": 271,
+        "wins": 80,
+        "losses": 189,
+        "ambiguous": 0,
+        "expired": 2,
+        "resolved": 269,
+        "win_rate_percent": 29.74,
+        "average_r": -0.2268,
+        "profit_factor": 0.6772,
+        "round_trip_cost_points": 0.0,
+        "net_average_r": -0.2268,
+        "net_profit_factor": 0.6772,
+        "by_regime": {
+          "TRANSITION": {
+            "signals": 81,
+            "wins": 25,
+            "losses": 56,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 30.86
+          },
+          "RANGE": {
+            "signals": 33,
+            "wins": 9,
+            "losses": 24,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 27.27
+          },
+          "TRENDING": {
+            "signals": 157,
+            "wins": 46,
+            "losses": 109,
+            "ambiguous": 0,
+            "expired": 2,
+            "win_rate": 29.68
+          }
+        }
+      },
+      "9": {
+        "signals": 123,
+        "wins": 38,
+        "losses": 84,
+        "ambiguous": 0,
+        "expired": 1,
+        "resolved": 122,
+        "win_rate_percent": 31.15,
+        "average_r": -0.1902,
+        "profit_factor": 0.7238,
+        "round_trip_cost_points": 0.0,
+        "net_average_r": -0.1902,
+        "net_profit_factor": 0.7238,
+        "by_regime": {
+          "TRANSITION": {
+            "signals": 31,
+            "wins": 9,
+            "losses": 22,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 29.03
+          },
+          "TRENDING": {
+            "signals": 92,
+            "wins": 29,
+            "losses": 62,
+            "ambiguous": 0,
+            "expired": 1,
+            "win_rate": 31.87
+          }
+        }
+      }
+    }
+  },
+  {
+    "fold": 2,
+    "train_start": "2026-04-06T09:15:00+05:30",
+    "train_end": "2026-06-18T14:14:00+05:30",
+    "validation_start": "2026-06-18T14:15:00+05:30",
+    "validation_end": "2026-07-27T10:29:00+05:30",
+    "training_rows": 19050,
+    "round_trip_cost_points": 0.0,
+    "score_threshold_results": {
+      "7": {
+        "signals": 192,
+        "wins": 87,
+        "losses": 97,
+        "ambiguous": 0,
+        "expired": 8,
+        "resolved": 184,
+        "win_rate_percent": 47.28,
+        "average_r": 0.2293,
+        "profit_factor": 1.4351,
+        "round_trip_cost_points": 0.0,
+        "net_average_r": 0.2293,
+        "net_profit_factor": 1.4351,
+        "by_regime": {
+          "TRANSITION": {
+            "signals": 92,
+            "wins": 38,
+            "losses": 50,
+            "ambiguous": 0,
+            "expired": 4,
+            "win_rate": 43.18
+          },
+          "TRENDING": {
+            "signals": 72,
+            "wins": 35,
+            "losses": 33,
+            "ambiguous": 0,
+            "expired": 4,
+            "win_rate": 51.47
+          },
+          "RANGE": {
+            "signals": 28,
+            "wins": 14,
+            "losses": 14,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 50.0
+          }
+        }
+      },
+      "8": {
+        "signals": 255,
+        "wins": 106,
+        "losses": 136,
+        "ambiguous": 1,
+        "expired": 12,
+        "resolved": 242,
+        "win_rate_percent": 43.8,
+        "average_r": 0.1388,
+        "profit_factor": 1.2471,
+        "round_trip_cost_points": 0.0,
+        "net_average_r": 0.1388,
+        "net_profit_factor": 1.2471,
+        "by_regime": {
+          "TRENDING": {
+            "signals": 158,
+            "wins": 63,
+            "losses": 86,
+            "ambiguous": 0,
+            "expired": 9,
+            "win_rate": 42.28
+          },
+          "TRANSITION": {
+            "signals": 70,
+            "wins": 29,
+            "losses": 37,
+            "ambiguous": 1,
+            "expired": 3,
+            "win_rate": 43.94
+          },
+          "RANGE": {
+            "signals": 27,
+            "wins": 14,
+            "losses": 13,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 51.85
+          }
+        }
+      },
+      "9": {
+        "signals": 101,
+        "wins": 35,
+        "losses": 66,
+        "ambiguous": 0,
+        "expired": 0,
+        "resolved": 101,
+        "win_rate_percent": 34.65,
+        "average_r": -0.099,
+        "profit_factor": 0.8485,
+        "round_trip_cost_points": 0.0,
+        "net_average_r": -0.099,
+        "net_profit_factor": 0.8485,
+        "by_regime": {
+          "TRENDING": {
+            "signals": 83,
+            "wins": 25,
+            "losses": 58,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 30.12
+          },
+          "TRANSITION": {
+            "signals": 18,
+            "wins": 10,
+            "losses": 8,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 55.56
+          }
+        }
+      }
+    }
+  },
+  {
+    "fold": 3,
+    "train_start": "2026-04-06T09:15:00+05:30",
+    "train_end": "2026-07-27T10:29:00+05:30",
+    "validation_start": "2026-07-27T10:30:00+05:30",
+    "validation_end": "2026-08-31T12:59:00+05:30",
+    "training_rows": 28575,
+    "round_trip_cost_points": 0.0,
+    "score_threshold_results": {
+      "7": {
+        "signals": 164,
+        "wins": 67,
+        "losses": 92,
+        "ambiguous": 0,
+        "expired": 5,
+        "resolved": 159,
+        "win_rate_percent": 42.14,
+        "average_r": 0.0956,
+        "profit_factor": 1.1652,
+        "round_trip_cost_points": 0.0,
+        "net_average_r": 0.0956,
+        "net_profit_factor": 1.1652,
+        "by_regime": {
+          "TRANSITION": {
+            "signals": 91,
+            "wins": 34,
+            "losses": 54,
+            "ambiguous": 0,
+            "expired": 3,
+            "win_rate": 38.64
+          },
+          "RANGE": {
+            "signals": 16,
+            "wins": 4,
+            "losses": 12,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 25.0
+          },
+          "TRENDING": {
+            "signals": 57,
+            "wins": 29,
+            "losses": 26,
+            "ambiguous": 0,
+            "expired": 2,
+            "win_rate": 52.73
+          }
+        }
+      },
+      "8": {
+        "signals": 221,
+        "wins": 89,
+        "losses": 124,
+        "ambiguous": 0,
+        "expired": 8,
+        "resolved": 213,
+        "win_rate_percent": 41.78,
+        "average_r": 0.0864,
+        "profit_factor": 1.1484,
+        "round_trip_cost_points": 0.0,
+        "net_average_r": 0.0864,
+        "net_profit_factor": 1.1484,
+        "by_regime": {
+          "TRANSITION": {
+            "signals": 70,
+            "wins": 29,
+            "losses": 39,
+            "ambiguous": 0,
+            "expired": 2,
+            "win_rate": 42.65
+          },
+          "RANGE": {
+            "signals": 17,
+            "wins": 3,
+            "losses": 14,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 17.65
+          },
+          "TRENDING": {
+            "signals": 134,
+            "wins": 57,
+            "losses": 71,
+            "ambiguous": 0,
+            "expired": 6,
+            "win_rate": 44.53
+          }
+        }
+      },
+      "9": {
+        "signals": 124,
+        "wins": 48,
+        "losses": 74,
+        "ambiguous": 0,
+        "expired": 2,
+        "resolved": 122,
+        "win_rate_percent": 39.34,
+        "average_r": 0.023,
+        "profit_factor": 1.0378,
+        "round_trip_cost_points": 0.0,
+        "net_average_r": 0.023,
+        "net_profit_factor": 1.0378,
+        "by_regime": {
+          "TRENDING": {
+            "signals": 101,
+            "wins": 39,
+            "losses": 60,
+            "ambiguous": 0,
+            "expired": 2,
+            "win_rate": 39.39
+          },
+          "TRANSITION": {
+            "signals": 23,
+            "wins": 9,
+            "losses": 14,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 39.13
+          }
+        }
+      }
+    }
+  },
+  {
+    "fold": 4,
+    "train_start": "2026-04-06T09:15:00+05:30",
+    "train_end": "2026-08-31T12:59:00+05:30",
+    "validation_start": "2026-08-31T13:00:00+05:30",
+    "validation_end": "2026-10-07T15:29:00+05:30",
+    "training_rows": 38100,
+    "round_trip_cost_points": 0.0,
+    "score_threshold_results": {
+      "7": {
+        "signals": 191,
+        "wins": 74,
+        "losses": 111,
+        "ambiguous": 0,
+        "expired": 6,
+        "resolved": 185,
+        "win_rate_percent": 40.0,
+        "average_r": 0.04,
+        "profit_factor": 1.0667,
+        "round_trip_cost_points": 0.0,
+        "net_average_r": 0.04,
+        "net_profit_factor": 1.0667,
+        "by_regime": {
+          "TRANSITION": {
+            "signals": 108,
+            "wins": 37,
+            "losses": 66,
+            "ambiguous": 0,
+            "expired": 5,
+            "win_rate": 35.92
+          },
+          "TRENDING": {
+            "signals": 57,
+            "wins": 22,
+            "losses": 34,
+            "ambiguous": 0,
+            "expired": 1,
+            "win_rate": 39.29
+          },
+          "RANGE": {
+            "signals": 26,
+            "wins": 15,
+            "losses": 11,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 57.69
+          }
+        }
+      },
+      "8": {
+        "signals": 256,
+        "wins": 115,
+        "losses": 136,
+        "ambiguous": 0,
+        "expired": 5,
+        "resolved": 251,
+        "win_rate_percent": 45.82,
+        "average_r": 0.1912,
+        "profit_factor": 1.3529,
+        "round_trip_cost_points": 0.0,
+        "net_average_r": 0.1912,
+        "net_profit_factor": 1.3529,
+        "by_regime": {
+          "TRANSITION": {
+            "signals": 83,
+            "wins": 42,
+            "losses": 39,
+            "ambiguous": 0,
+            "expired": 2,
+            "win_rate": 51.85
+          },
+          "TRENDING": {
+            "signals": 147,
+            "wins": 58,
+            "losses": 86,
+            "ambiguous": 0,
+            "expired": 3,
+            "win_rate": 40.28
+          },
+          "RANGE": {
+            "signals": 26,
+            "wins": 15,
+            "losses": 11,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 57.69
+          }
+        }
+      },
+      "9": {
+        "signals": 105,
+        "wins": 48,
+        "losses": 57,
+        "ambiguous": 0,
+        "expired": 0,
+        "resolved": 105,
+        "win_rate_percent": 45.71,
+        "average_r": 0.1886,
+        "profit_factor": 1.3474,
+        "round_trip_cost_points": 0.0,
+        "net_average_r": 0.1886,
+        "net_profit_factor": 1.3474,
+        "by_regime": {
+          "TRANSITION": {
+            "signals": 27,
+            "wins": 12,
+            "losses": 15,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 44.44
+          },
+          "TRENDING": {
+            "signals": 78,
+            "wins": 36,
+            "losses": 42,
+            "ambiguous": 0,
+            "expired": 0,
+            "win_rate": 46.15
+          }
+        }
+      }
+    }
+  }
+]

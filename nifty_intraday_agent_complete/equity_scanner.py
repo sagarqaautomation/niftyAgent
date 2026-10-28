@@ -1,10 +1,15 @@
 import csv
 import math
 from pathlib import Path
-from typing import Any, cast
+import os
+from typing import Any, Callable, Mapping, cast
 
 import pandas as pd
 
+from accuracy_config import quality_settings as quality
+from equity_research import summarize
+
+MIN_REWARD_RISK = float(os.getenv("EQUITY_MIN_REWARD_RISK", "1.5"))
 from indicators import detect_latest_candlestick_patterns
 from signal_engine import add_risk_levels, build_signal
 
@@ -47,7 +52,10 @@ def _feature_row_snapshot(frame: pd.DataFrame) -> dict[str, float | None]:
     row = frame.iloc[-1]
     fields = (
         "open", "high", "low", "close", "volume", "ema9", "ema21",
-        "rsi14", "vwap", "atr14",
+        "ema9_slope", "ema21_slope", "rsi14", "vwap", "atr14", "atr_pct",
+        "adx14", "plus_di14", "minus_di14", "relative_volume20",
+        "body_pct", "close_location", "prior_day_high", "prior_day_low",
+        "opening_range_high", "opening_range_low",
     )
     return {
         field: float(row[field]) if field in row.index and pd.notna(row[field]) else None
@@ -60,10 +68,21 @@ def build_equity_buy_signal(
     frames: dict[str, pd.DataFrame],
     live_price: float,
     news_bias: str = "NEUTRAL",
+    one_minute_pattern_rows: dict[pd.Timestamp, list[dict[str, str]]] | None = None,
+    five_minute_pattern_rows: dict[pd.Timestamp, list[dict[str, str]]] | None = None,
+    premarket_context: Mapping[str, Any] | None = None,
+    diagnostics: dict[str, Any] | None = None,
+    research_provider: Callable[[float], dict[str, Any]] | None = None,
+    live_price_time: str | None = None,
 ) -> dict[str, Any] | None:
+    def reject(reason: str) -> None:
+        if diagnostics is not None:
+            diagnostics["reason"] = reason
+
     minute_frame = frames["1min"]
     five_minute_frame = frames["5min"]
     if minute_frame.empty or five_minute_frame.empty:
+        reject("Waiting for 1-minute and 5-minute candle history")
         return None
 
     current_minute = cast(pd.Timestamp, minute_frame.index[-1])
@@ -74,14 +93,42 @@ def build_equity_buy_signal(
         five_minute_frame.index < current_minute.floor("5min")
     ]
     if closed_minutes.empty or closed_five_minutes.empty:
+        reject("Waiting for closed 1-minute and 5-minute candles")
         return None
 
-    analysis = build_signal(closed_minutes, closed_five_minutes, news_bias, "NEUTRAL")
+    latest_one_minute = cast(pd.Timestamp, closed_minutes.index[-1])
+    one_minute_patterns = (
+        detect_latest_candlestick_patterns(closed_minutes)
+        if one_minute_pattern_rows is None
+        else one_minute_pattern_rows.get(latest_one_minute, [])
+    )
+    analysis = build_signal(
+        closed_minutes,
+        closed_five_minutes,
+        news_bias,
+        "NEUTRAL",
+        candlestick_patterns=one_minute_patterns,
+        premarket_context=premarket_context,
+    )
     if analysis["signal"] != "CALL":
+        reason = str(analysis.get("reason") or "no qualifying bullish setup")
+        reject(f"Signal engine returned {analysis['signal']}: {reason}")
+        return None
+    relative_volume = analysis.get("relative_volume")
+    if relative_volume is None or float(relative_volume) < quality.relative_volume_threshold:
+        reject(
+            "Relative volume below threshold"
+            if relative_volume is not None else "Relative volume unavailable"
+        )
         return None
 
-    one_minute_patterns = detect_latest_candlestick_patterns(closed_minutes)
-    five_minute_patterns = detect_latest_candlestick_patterns(closed_five_minutes)
+    five_minute_patterns = (
+        detect_latest_candlestick_patterns(closed_five_minutes)
+        if five_minute_pattern_rows is None
+        else five_minute_pattern_rows.get(
+            cast(pd.Timestamp, closed_five_minutes.index[-1]), []
+        )
+    )
     matched_patterns = one_minute_patterns + five_minute_patterns
     bullish_patterns = [
         pattern for pattern in matched_patterns
@@ -91,11 +138,12 @@ def build_equity_buy_signal(
         pattern for pattern in matched_patterns
         if pattern["direction"] == "BEARISH"
     ]
-    if not bullish_patterns or bearish_patterns:
-        return None
+    # Candlestick patterns are optional supporting evidence only; they never
+    # gate or veto an equity BUY signal.
 
     atr = analysis.get("atr")
     if atr is None or pd.isna(atr) or float(atr) <= 0:
+        reject("ATR unavailable or non-positive")
         return None
 
     signal = dict(analysis)
@@ -108,6 +156,32 @@ def build_equity_buy_signal(
         "atr": float(atr),
     })
     add_risk_levels(signal)
+    target_points = float(signal["target_price"]) - float(signal["entry_price"])
+    if target_points < quality.equity_min_target_points:
+        reject(
+            f"Target only {target_points:.2f} points above entry; "
+            f"minimum is {quality.equity_min_target_points:g}"
+        )
+        return None
+    risk_points = float(signal["entry_price"]) - float(signal["stop_loss"] or 0)
+    if risk_points <= 0:
+        reject("Stop-loss unavailable")
+        return None
+    reward_risk = target_points / risk_points
+    if reward_risk < MIN_REWARD_RISK:
+        reject(f"Reward/risk {reward_risk:.2f} below minimum {MIN_REWARD_RISK:g}")
+        return None
+    signal["reward_risk"] = round(reward_risk, 2)
+
+    # Research runs last because it may fetch fundamentals over the network.
+    research: dict[str, Any] | None = None
+    if research_provider is not None:
+        research = research_provider(float(live_price))
+        signal["research"] = research
+        if research["verdict"] != "SUPPORTIVE":
+            reject(f"Research {research['verdict']}: {summarize(research)}")
+            return None
+        signal["reason"] = f"{signal['reason']}; {summarize(research)}"
     signal["signal"] = "BUY"
 
     average_move: float = closed_minutes["close"].diff().abs().tail(20).mean()
@@ -120,21 +194,70 @@ def build_equity_buy_signal(
         )
 
     signal["reason"] = (
-        f"{signal['reason']}; candlestick confirmation: "
-        f"{', '.join(sorted({pattern['name'] for pattern in bullish_patterns}))}; "
-        "estimated holding time uses recent 1-minute price movement"
+        f"{signal['reason']}; "
+        + (
+            "optional candlestick support: "
+            f"{', '.join(sorted({pattern['name'] for pattern in bullish_patterns}))}; "
+            if bullish_patterns and not bearish_patterns else ""
+        )
+        + "estimated holding time uses recent 1-minute price movement"
     )
     signal["feature_snapshot"] = {
-        "version": 1,
+        "version": 3,
         "symbol": symbol,
         "signal_candle_time": signal["signal_candle_time"],
         "entry_price": float(live_price),
+        "market_regime": analysis.get("market_regime"),
+        "technical_score": analysis.get("technical_score"),
+        "context_score": analysis.get("context_score"),
+        "total_score": analysis.get("total_score"),
         "news_bias": news_bias,
+        "premarket_context": dict(analysis.get("premarket_context") or {}),
         "one_minute": _feature_row_snapshot(closed_minutes),
         "five_minute": _feature_row_snapshot(closed_five_minutes),
+        "research": signal.get("research"),
+        "reward_risk": signal.get("reward_risk"),
+        "audit_trail": {
+            "rule_version": "equity-v2.1",
+            "price_as_of": live_price_time,
+            "one_minute_candles_as_of": signal["signal_candle_time"],
+            "five_minute_candles_as_of": cast(pd.Timestamp, closed_five_minutes.index[-1]).isoformat(),
+            "checks": [
+                {"name": "closed_1m_and_5m_candles", "status": "PASS"},
+                {"name": "signal_engine_direction", "status": "PASS", "observed": "CALL"},
+                {
+                    "name": "relative_volume",
+                    "status": "PASS",
+                    "observed": float(relative_volume),
+                    "minimum": float(quality.relative_volume_threshold),
+                },
+                {"name": "positive_atr", "status": "PASS", "observed": float(atr)},
+                {
+                    "name": "minimum_target_distance",
+                    "status": "PASS",
+                    "observed_points": target_points,
+                    "minimum_points": float(quality.equity_min_target_points),
+                },
+                {
+                    "name": "minimum_reward_risk",
+                    "status": "PASS",
+                    "observed": float(reward_risk),
+                    "minimum": float(MIN_REWARD_RISK),
+                },
+                {
+                    "name": "research_verdict",
+                    "status": "PASS" if research and research.get("verdict") == "SUPPORTIVE" else "NOT_RUN",
+                    "observed": research.get("verdict") if research else None,
+                },
+            ],
+            "source_evidence": list((research or {}).get("evidence", [])),
+            "candlestick_patterns_are_gates": False,
+        },
         "one_minute_patterns": one_minute_patterns,
         "five_minute_patterns": five_minute_patterns,
     }
+    if diagnostics is not None:
+        diagnostics["reason"] = "BUY setup passed all scanner filters"
     return signal
 
 

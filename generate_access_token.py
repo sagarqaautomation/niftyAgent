@@ -1,6 +1,8 @@
 import os
 from getpass import getpass
+import sys
 from pathlib import Path
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parent
 PROJECT_DIR = ROOT / "nifty_intraday_agent_complete"
@@ -14,7 +16,7 @@ except ImportError as exc:
     ) from exc
 
 try:
-    from kiteconnect import KiteConnect
+    from kiteconnect import KiteConnect  # type: ignore[reportMissingTypeStubs]
 except ImportError as exc:
     raise RuntimeError(
         "kiteconnect is missing. Run: '" + str(ROOT / '.venv' / 'Scripts' / 'python.exe') + " -m pip install -r " + str(PROJECT_DIR / 'requirements.txt') + "'"
@@ -22,6 +24,9 @@ except ImportError as exc:
 
 if not ENV_FILE.is_file():
     raise FileNotFoundError(f"Project .env file not found: {ENV_FILE}")
+
+sys.path.insert(0, str(PROJECT_DIR))
+from kite_auth_store import save_access_token
 
 load_dotenv(ENV_FILE, override=True)
 
@@ -34,7 +39,7 @@ if not api_key or not api_secret:
         f"Expected: {ENV_FILE}"
     )
 
-kite = KiteConnect(api_key=api_key)
+kite: Any = KiteConnect(api_key=api_key)
 
 print("Open this Kite Connect login URL in your browser and sign in:")
 print(kite.login_url())
@@ -44,11 +49,17 @@ request_token = getpass("Kite request token (input hidden): ").strip()
 if not request_token:
     raise ValueError("Request token cannot be empty")
 
-session = kite.generate_session(request_token, api_secret=api_secret)
+session = cast(
+    dict[str, Any],
+    kite.generate_session(request_token, api_secret=api_secret),
+)
 updated, _, _ = set_key(
     ENV_FILE, "KITE_ACCESS_TOKEN", session["access_token"], quote_mode="never"
 )
 if not updated:
     raise RuntimeError(f"Could not update {ENV_FILE}; check file permissions.")
 
-print(f"Kite access token saved to {ENV_FILE}")
+os.environ["KITE_TOKEN_FILE"] = str(PROJECT_DIR / "data" / "kite_token.json")
+save_access_token(session["access_token"], session.get("public_token"))
+print(f"Kite access token saved to {ENV_FILE} and token store")
+print("Restart NiftyAgent after generating a new token.")
