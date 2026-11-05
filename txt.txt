@@ -6,3 +6,7 @@ Genearting the token : https://kite.zerodha.com/connect/login?api_key=0coua46u1l
 run the python generate access token file and copy the code from tabove file
 
 python backtester.py data/nifty_1m.csv > backtest_results.json
+
+sk-abb389d53b54f41b-9bf373-10302019
+
+docker compose up -d --build

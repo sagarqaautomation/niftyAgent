@@ -12,3 +12,5 @@ __pycache__/
 logs/*
 .idea/
 .vscode/
+
+!data/equity_watchlist.csv

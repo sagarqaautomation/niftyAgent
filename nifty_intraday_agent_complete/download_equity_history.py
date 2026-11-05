@@ -13,13 +13,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from config import settings
-
-try:
-    from kiteconnect import KiteConnect  # type: ignore[reportMissingTypeStubs]
-except ImportError as exc:
-    raise RuntimeError(
-        "kiteconnect is missing. Install the project requirements before downloading."
-    ) from exc
+from equity_scanner import load_watchlist
 
 
 MARKET_TIMEZONE = ZoneInfo(settings.market_timezone)
@@ -165,12 +159,13 @@ def fetch_symbol(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Download six months of 1-minute history for today's equity signal symbols"
+        description="Download six months of 1-minute history for equity signals or the full watchlist"
     )
     parser.add_argument("--months", type=int, default=6)
     parser.add_argument("--chunk-days", type=int, default=30)
     parser.add_argument("--delay", type=float, default=0.5)
     parser.add_argument("--output-dir", default="data/equity_history_6m")
+    parser.add_argument("--all-watchlist", action="store_true", help="download every symbol in EQUITY_WATCHLIST_PATH")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
     if args.months < 1:
@@ -181,11 +176,23 @@ def main() -> None:
     if not settings.kite_api_key or not settings.kite_access_token:
         raise RuntimeError("KITE_API_KEY and KITE_ACCESS_TOKEN must be set in .env")
 
-    symbols = signal_symbols_for_today()
+    if args.all_watchlist:
+        symbols = load_watchlist(settings.equity_watchlist_path)
+    else:
+        symbols = signal_symbols_for_today()
     if not symbols:
+        if args.all_watchlist:
+            raise RuntimeError("The configured equity watchlist is empty.")
         raise RuntimeError(
             "No equity signals were recorded today; there are no symbols to download."
         )
+
+    try:
+        from kiteconnect import KiteConnect  # type: ignore[reportMissingTypeStubs]
+    except ImportError as exc:
+        raise RuntimeError(
+            "kiteconnect is missing. Install the project requirements before downloading."
+        ) from exc
 
     kite: Any = KiteConnect(api_key=settings.kite_api_key)
     kite.set_access_token(settings.kite_access_token)
@@ -280,3 +287,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
