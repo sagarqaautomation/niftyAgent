@@ -1,18 +1,34 @@
 import os
 import json
 import sqlite3
-from datetime import datetime, timezone, timedelta
+import threading
+from datetime import date, datetime, timezone, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from config import settings
+
+SQLITE_BUSY_TIMEOUT_SECONDS = 30
+
+
+class _ClosingSQLiteConnection(sqlite3.Connection):
+    def __exit__(self, exception_type, exception, traceback):
+        try:
+            return super().__exit__(exception_type, exception, traceback)
+        finally:
+            self.close()
+
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 def connect():
     os.makedirs(os.path.dirname(settings.db_path) or ".", exist_ok=True)
-    return sqlite3.connect(settings.db_path)
+    return sqlite3.connect(
+        settings.db_path,
+        timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
+        factory=_ClosingSQLiteConnection,
+    )
 
 def normalize_candle_timestamps() -> None:
     timezone_info = ZoneInfo(settings.market_timezone)
@@ -55,12 +71,30 @@ def ensure_market_status_columns() -> None:
         "analysis_updated_at": "TEXT",
         "spot_last_price": "REAL",
         "spot_last_tick_at": "TEXT",
+        "kite_auth_state": "TEXT NOT NULL DEFAULT 'UNKNOWN'",
+        "kite_auth_reason": "TEXT",
+        "kite_auth_checked_at": "TEXT",
     }
     with connect() as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(market_status)")}
         for name, declaration in additions.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE market_status ADD COLUMN {name} {declaration}")
+
+def ensure_news_columns() -> None:
+    additions = {
+        "summary": "TEXT",
+        "event_categories_json": "TEXT NOT NULL DEFAULT '[]'",
+        "symbols_json": "TEXT NOT NULL DEFAULT '[]'",
+        "published_epoch": "REAL",
+        "analyst_recommendation": "TEXT",
+        "author": "TEXT",
+    }
+    with connect() as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(news)")}
+        for name, declaration in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE news ADD COLUMN {name} {declaration}")
 
 def ensure_signal_columns() -> None:
     additions = {
@@ -72,6 +106,10 @@ def ensure_signal_columns() -> None:
         "spot_trigger_offset": "REAL",
         "spot_cross_price": "REAL",
         "spot_cross_time": "TEXT",
+        "market_regime": "TEXT",
+        "adx": "REAL",
+        "relative_volume": "REAL",
+        "feature_snapshot_json": "TEXT",
     }
     with connect() as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(signals)")}
@@ -215,16 +253,272 @@ def expire_stale_equity_signals(
 
 def init_db():
     with connect() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         with open("schema.sql", "r", encoding="utf-8") as f:
             conn.executescript(f.read())
     ensure_market_status_columns()
+    ensure_premarket_snapshots_table()
+    ensure_news_columns()
     ensure_signal_columns()
     ensure_equity_feature_snapshot_column()
     ensure_equity_candle_patterns_column()
     ensure_equity_signal_expired_status()
+    ensure_equity_scan_status_table()
+    ensure_equity_research_candidates_table()
     expire_overdue_equity_outcomes()
     expire_stale_equity_signals()
     normalize_candle_timestamps()
+
+def ensure_equity_scan_status_table() -> None:
+    with connect() as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS equity_scan_status (
+            symbol TEXT PRIMARY KEY,
+            instrument_token INTEGER,
+            last_price REAL,
+            last_tick_at TEXT,
+            one_minute_bars INTEGER NOT NULL DEFAULT 0,
+            five_minute_bars INTEGER NOT NULL DEFAULT 0,
+            last_evaluated_at TEXT,
+            rejection_reason TEXT NOT NULL DEFAULT 'Waiting for first live tick',
+            updated_at TEXT NOT NULL
+        )
+        """)
+
+
+def update_equity_scan_status(
+    symbol: str,
+    instrument_token: int | None = None,
+    last_price: float | None = None,
+    last_tick_at: str | None = None,
+    one_minute_bars: int | None = None,
+    five_minute_bars: int | None = None,
+    last_evaluated_at: str | None = None,
+    rejection_reason: str | None = None,
+) -> None:
+    fields = {
+        "instrument_token": instrument_token, "last_price": last_price,
+        "last_tick_at": last_tick_at, "one_minute_bars": one_minute_bars,
+        "five_minute_bars": five_minute_bars,
+        "last_evaluated_at": last_evaluated_at,
+        "rejection_reason": rejection_reason,
+    }
+    with connect() as conn:
+        _write_equity_scan_status(conn, symbol, fields)
+
+
+def _write_equity_scan_status(
+    conn: sqlite3.Connection, symbol: str, fields: dict[str, Any]
+) -> None:
+    now = utc_now()
+    # An explicit NULL bypasses column defaults, so create the row first.
+    conn.execute(
+        "INSERT OR IGNORE INTO equity_scan_status (symbol, updated_at) VALUES (?,?)",
+        (symbol, now),
+    )
+    conn.execute("""
+    UPDATE equity_scan_status SET
+      instrument_token=COALESCE(?,instrument_token),
+      last_price=COALESCE(?,last_price),
+      last_tick_at=COALESCE(?,last_tick_at),
+      one_minute_bars=COALESCE(?,one_minute_bars),
+      five_minute_bars=COALESCE(?,five_minute_bars),
+      last_evaluated_at=COALESCE(?,last_evaluated_at),
+      rejection_reason=COALESCE(?,rejection_reason),
+      updated_at=?
+    WHERE symbol=?
+    """, (
+        fields.get("instrument_token"), fields.get("last_price"),
+        fields.get("last_tick_at"), fields.get("one_minute_bars"),
+        fields.get("five_minute_bars"), fields.get("last_evaluated_at"),
+        fields.get("rejection_reason"), now, symbol,
+    ))
+
+
+_pending_equity_status: dict[str, dict[str, Any]] = {}
+_pending_equity_status_lock = threading.Lock()
+
+
+def queue_equity_scan_status(
+    symbol: str,
+    instrument_token: int | None = None,
+    last_price: float | None = None,
+    last_tick_at: str | None = None,
+    one_minute_bars: int | None = None,
+    five_minute_bars: int | None = None,
+    last_evaluated_at: str | None = None,
+    rejection_reason: str | None = None,
+) -> None:
+    """Buffer a status update; flush_equity_scan_status writes all in one transaction.
+
+    A per-tick SQLite commit costs tens of milliseconds, far more than a
+    300-symbol live feed can afford. Later non-null values overwrite earlier ones.
+    """
+    fields = {
+        "instrument_token": instrument_token, "last_price": last_price,
+        "last_tick_at": last_tick_at, "one_minute_bars": one_minute_bars,
+        "five_minute_bars": five_minute_bars,
+        "last_evaluated_at": last_evaluated_at,
+        "rejection_reason": rejection_reason,
+    }
+    with _pending_equity_status_lock:
+        pending = _pending_equity_status.setdefault(symbol, {})
+        pending.update({k: v for k, v in fields.items() if v is not None})
+
+
+def flush_equity_scan_status() -> int:
+    with _pending_equity_status_lock:
+        batch = dict(_pending_equity_status)
+        _pending_equity_status.clear()
+    if not batch:
+        return 0
+    try:
+        with connect() as conn:
+            for symbol, fields in batch.items():
+                _write_equity_scan_status(conn, symbol, fields)
+    except Exception:
+        # Re-queue without clobbering any newer values that arrived meanwhile.
+        with _pending_equity_status_lock:
+            for symbol, fields in batch.items():
+                _pending_equity_status.setdefault(symbol, {}).update(
+                    {k: v for k, v in fields.items()
+                     if k not in _pending_equity_status.get(symbol, {})}
+                )
+        raise
+    return len(batch)
+
+
+def ensure_equity_research_candidates_table() -> None:
+    with connect() as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS equity_research_candidates (
+            symbol TEXT PRIMARY KEY,
+            verdict TEXT NOT NULL,
+            research_score INTEGER NOT NULL,
+            news_score INTEGER,
+            analyst_score INTEGER,
+            fundamentals_score INTEGER,
+            catalyst TEXT,
+            analyst_upside_pct REAL,
+            basis TEXT,
+            research_json TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(equity_research_candidates)")}
+        if "source" not in columns:
+            conn.execute(
+                "ALTER TABLE equity_research_candidates ADD COLUMN source TEXT DEFAULT 'Watchlist'"
+            )
+
+
+def replace_equity_research_candidates(rows: list[dict[str, Any]]) -> None:
+    """Atomically replace the published candidate list."""
+    now = utc_now()
+    with connect() as conn:
+        conn.execute("DELETE FROM equity_research_candidates")
+        conn.executemany("""
+        INSERT INTO equity_research_candidates
+        (symbol,verdict,research_score,news_score,analyst_score,fundamentals_score,
+         catalyst,analyst_upside_pct,basis,research_json,updated_at,source)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """, [(
+            row["symbol"], row["verdict"], row["research_score"], row.get("news_score"),
+            row.get("analyst_score"), row.get("fundamentals_score"), row.get("catalyst"),
+            row.get("analyst_upside_pct"), row.get("basis"), row.get("research_json"), now,
+            row.get("source", "Watchlist"),
+        ) for row in rows])
+
+
+def list_equity_research_candidates(limit: int = 100) -> list[dict[str, Any]]:
+    with connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+        SELECT symbol,source,verdict,research_score,news_score,analyst_score,fundamentals_score,
+               catalyst,analyst_upside_pct,basis,updated_at
+        FROM equity_research_candidates
+        ORDER BY CASE verdict WHEN 'SUPPORTIVE' THEN 0 WHEN 'INSUFFICIENT' THEN 1 ELSE 2 END,
+                 research_score DESC, symbol ASC LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(row) for row in rows]
+
+
+def list_equity_scan_status(limit: int = 200) -> list[dict[str, Any]]:
+    with connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+        SELECT symbol,instrument_token,last_price,last_tick_at,one_minute_bars,
+               five_minute_bars,last_evaluated_at,rejection_reason,updated_at
+        FROM equity_scan_status
+        ORDER BY symbol ASC LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(row) for row in rows]
+
+
+def ensure_premarket_snapshots_table() -> None:
+    with connect() as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS premarket_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            observed_at TEXT NOT NULL,
+            saved_at TEXT NOT NULL,
+            directional_bias TEXT NOT NULL,
+            directional_score REAL NOT NULL,
+            volatility_regime TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL
+        )
+        """)
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_premarket_snapshots_observed
+        ON premarket_snapshots(observed_at DESC, id DESC)
+        """)
+
+
+def insert_premarket_snapshot(snapshot: dict[str, Any]) -> int:
+    observed_at = str(snapshot.get("observed_at") or utc_now())
+    with connect() as conn:
+        cursor = conn.execute("""
+        INSERT INTO premarket_snapshots
+        (observed_at,saved_at,directional_bias,directional_score,volatility_regime,snapshot_json)
+        VALUES (?,?,?,?,?,?)
+        """, (
+            observed_at, utc_now(), str(snapshot.get("directional_bias", "INSUFFICIENT_DATA")),
+            float(snapshot.get("directional_score", 0.0)),
+            str(snapshot.get("volatility_regime", "UNKNOWN")),
+            json.dumps(snapshot, allow_nan=False),
+        ))
+        return int(cursor.lastrowid)
+
+
+def latest_premarket_snapshot() -> dict[str, Any] | None:
+    with connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("""
+        SELECT id,observed_at,saved_at,directional_bias,directional_score,
+               volatility_regime,snapshot_json
+        FROM premarket_snapshots ORDER BY observed_at DESC,id DESC LIMIT 1
+        """).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    result["snapshot"] = json.loads(result.pop("snapshot_json"))
+    return result
+
+
+def list_premarket_snapshots(limit: int = 50) -> list[dict[str, Any]]:
+    with connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+        SELECT id,observed_at,saved_at,directional_bias,directional_score,
+               volatility_regime,snapshot_json
+        FROM premarket_snapshots ORDER BY observed_at DESC,id DESC LIMIT ?
+        """, (max(1, min(int(limit), 500)),)).fetchall()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["snapshot"] = json.loads(item.pop("snapshot_json"))
+        results.append(item)
+    return results
 
 def insert_candle(c: dict[str, Any]) -> None:
     insert_candles([c])
@@ -383,6 +677,16 @@ def get_market_status() -> dict[str, Any] | None:
         row = conn.execute("SELECT * FROM market_status WHERE id=1").fetchone()
         return dict(row) if row else None
 
+def update_kite_auth_status(state: str, reason: str) -> None:
+    """Persist the result of the Kite REST authentication check for the UI."""
+    with connect() as conn:
+        conn.execute("""
+        UPDATE market_status
+        SET kite_auth_state=?, kite_auth_reason=?, kite_auth_checked_at=?, updated_at=?
+        WHERE id=1
+        """, (state, reason, utc_now(), utc_now()))
+
+
 def update_analysis_status(state: str, score: int | None, reason: str) -> None:
     with connect() as conn:
         conn.execute("""
@@ -408,12 +712,26 @@ def insert_news(item: dict[str, Any]) -> None:
     with connect() as conn:
         conn.execute("""
         INSERT OR IGNORE INTO news
-        (source,title,url,published_at,fetched_at,sentiment,market_bias)
-        VALUES (?,?,?,?,?,?,?)
+        (source,author,title,url,published_at,fetched_at,sentiment,market_bias,summary,
+         event_categories_json,symbols_json,published_epoch,analyst_recommendation)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(source,title) DO UPDATE SET
+        url=excluded.url,
+        published_at=COALESCE(excluded.published_at,news.published_at),
+        sentiment=excluded.sentiment,
+        market_bias=excluded.market_bias,
+        summary=excluded.summary,
+        event_categories_json=excluded.event_categories_json,
+        symbols_json=excluded.symbols_json,
+        published_epoch=COALESCE(excluded.published_epoch,news.published_epoch),
+        analyst_recommendation=COALESCE(excluded.analyst_recommendation,news.analyst_recommendation)
         """, (
-            item["source"], item["title"], item.get("url"),
+            item["source"], item.get("author"), item["title"], item.get("url"),
             item.get("published_at"), utc_now(), item.get("sentiment"),
-            item.get("market_bias")
+            item.get("market_bias"), item.get("summary"),
+            json.dumps(item.get("categories", []), ensure_ascii=True),
+            json.dumps(item.get("symbols", []), ensure_ascii=True),
+            item.get("published_epoch"), item.get("analyst_recommendation"),
         ))
 
 def insert_signal(s: dict[str, Any]) -> int:
@@ -423,8 +741,9 @@ def insert_signal(s: dict[str, Any]) -> int:
         (created_at,signal,technical_score,context_score,total_score,entry_price,
          target_price,stop_loss,option_symbol,option_entry,reason,news_bias,option_bias,
          signal_instrument,signal_candle_time,spot_reference_price,spot_reference_time,
-         spot_trigger_price,spot_trigger_offset,spot_cross_price,spot_cross_time)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         spot_trigger_price,spot_trigger_offset,spot_cross_price,spot_cross_time,
+         market_regime,adx,relative_volume,feature_snapshot_json)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             utc_now(), s["signal"], s["technical_score"], s["context_score"],
             s["total_score"], s.get("entry_price"), s.get("target_price"),
@@ -433,12 +752,53 @@ def insert_signal(s: dict[str, Any]) -> int:
             s.get("signal_instrument"), s.get("signal_candle_time"),
             s.get("spot_reference_price"), s.get("spot_reference_time"),
             s.get("spot_trigger_price"), s.get("spot_trigger_offset"),
-            s.get("spot_cross_price"), s.get("spot_cross_time")
+            s.get("spot_cross_price"), s.get("spot_cross_time"),
+            s.get("market_regime"), s.get("adx"), s.get("relative_volume"),
+            json.dumps(s.get("feature_snapshot"), allow_nan=False)
+            if s.get("feature_snapshot") is not None else None,
         ))
         row_id = cur.lastrowid
         return int(row_id) if row_id is not None else 0
 
-def resolve_with_bar(bar: dict[str, Any]) -> None:
+def _bar_starts_after_signal(
+    bar_timestamp: datetime | str | None,
+    signal_created_at: datetime | str,
+) -> bool:
+    """Avoid resolving a signal against a candle that started before it existed."""
+    if bar_timestamp is None:
+        # Compatibility for non-live callers; the live worker always supplies
+        # the timestamp so outcomes cannot be resolved with pre-entry candles.
+        return True
+    try:
+        bar_time = (
+            bar_timestamp
+            if isinstance(bar_timestamp, datetime)
+            else datetime.fromisoformat(str(bar_timestamp))
+        )
+        created_time = (
+            signal_created_at
+            if isinstance(signal_created_at, datetime)
+            else datetime.fromisoformat(str(signal_created_at))
+        )
+    except (TypeError, ValueError):
+        # If either timestamp is malformed, do not record an untrustworthy result.
+        return False
+
+    market_tz = ZoneInfo(settings.market_timezone)
+    if bar_time.tzinfo is None:
+        bar_time = bar_time.replace(tzinfo=market_tz)
+    if created_time.tzinfo is None:
+        created_time = created_time.replace(tzinfo=timezone.utc)
+    # Candle timestamps denote the candle's opening time. Require the candle
+    # to start strictly after signal creation to avoid using pre-entry prices
+    # from the signal's own minute.
+    return bar_time.astimezone(timezone.utc) > created_time.astimezone(timezone.utc)
+
+
+def resolve_with_bar(
+    bar: dict[str, Any],
+    bar_timestamp: datetime | str | None = None,
+) -> None:
     with connect() as conn:
         rows = conn.execute("""
         SELECT id, signal, entry_price, target_price, stop_loss, created_at
@@ -446,8 +806,10 @@ def resolve_with_bar(bar: dict[str, Any]) -> None:
         """).fetchall()
 
         for row in rows:
-            sid, signal, entry, target, stop, _ = row
+            sid, signal, entry, target, stop, created_at = row
             if not entry or not target or not stop:
+                continue
+            if not _bar_starts_after_signal(bar_timestamp, created_at):
                 continue
 
             target_hit = False
@@ -474,7 +836,7 @@ def resolve_with_bar(bar: dict[str, Any]) -> None:
                 conn.execute("""
                 UPDATE signals SET status=?, result_price=?, resolved_at=?,
                 accuracy=?, evaluation_minutes=?
-                WHERE id=?
+                WHERE id=? AND status='OPEN'
                 """, (
                     status, bar["close"], utc_now(), accuracy,
                     None, sid
@@ -508,11 +870,36 @@ def performance() -> dict[str, int | float | None]:
         ambiguous = conn.execute("SELECT COUNT(*) FROM signals WHERE status='AMBIGUOUS'").fetchone()[0]
         resolved = wins + losses
         accuracy = round(wins / resolved * 100, 2) if resolved else None
+
+        outcome_rows = conn.execute("""
+        SELECT status,entry_price,target_price,stop_loss
+        FROM signals WHERE status IN ('SUCCESS','FAILED')
+        """).fetchall()
+        r_values: list[float] = []
+        gross_profit = 0.0
+        gross_loss = 0.0
+        for status, entry, target, stop in outcome_rows:
+            if not entry or not target or not stop:
+                continue
+            risk = abs(float(entry) - float(stop))
+            if risk <= 0:
+                continue
+            reward = abs(float(target) - float(entry))
+            r_value = reward / risk if status == "SUCCESS" else -1.0
+            r_values.append(r_value)
+            if r_value > 0:
+                gross_profit += r_value
+            else:
+                gross_loss += abs(r_value)
+
+        avg_r = round(sum(r_values) / len(r_values), 4) if r_values else None
+        profit_factor = round(gross_profit / gross_loss, 4) if gross_loss else None
         return {
             "total": total, "calls": calls, "puts": puts,
             "wins": wins, "losses": losses, "expired": expired,
             "ambiguous": ambiguous, "resolved": resolved,
-            "accuracy_percent": accuracy
+            "accuracy_percent": accuracy, "avg_r": avg_r,
+            "profit_factor": profit_factor,
         }
 
 def latest_signal() -> dict[str, Any] | None:
@@ -647,19 +1034,53 @@ def list_equity_signals(limit: int = 50) -> list[dict[str, Any]]:
 def list_equity_signals_by_status(
     status: Literal["OPEN", "STOP_HIT", "TARGET_HIT", "EXPIRED"],
     limit: int = 50,
+    market_day: date | None = None,
 ) -> list[dict[str, Any]]:
+    if market_day is not None:
+        market_timezone = ZoneInfo(settings.market_timezone)
+        day_start = datetime(
+            market_day.year, market_day.month, market_day.day,
+            tzinfo=market_timezone,
+        )
+        day_end = day_start + timedelta(days=1)
+        start_utc = day_start.astimezone(timezone.utc).isoformat()
+        end_utc = day_end.astimezone(timezone.utc).isoformat()
+        query = """
+        SELECT * FROM equity_signals
+        WHERE status=? AND resolved_at>=? AND resolved_at<?
+        ORDER BY resolved_at DESC,id DESC LIMIT ?
+        """
+        parameters: tuple[Any, ...] = (status, start_utc, end_utc, limit)
+    else:
+        query = """
+        SELECT * FROM equity_signals WHERE status=? ORDER BY id DESC LIMIT ?
+        """
+        parameters = (status, limit)
+
     with connect() as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
-        SELECT * FROM equity_signals WHERE status=? ORDER BY id DESC LIMIT ?
-        """, (status, limit)).fetchall()
+        rows = conn.execute(query, parameters).fetchall()
         return [dict(row) for row in rows]
 
-def equity_signal_performance() -> dict[str, int | float | None]:
+def equity_signal_performance(round_trip_cost_bps: float = 25.0) -> dict[str, int | float | None]:
+    """Summarize forward signal outcomes using idealized target/stop fills.
+
+    Cost is an all-in round-trip percentage of entry notional, expressed in bps.
+    This is not a historical backtest or a broker-specific fee quote.
+    """
+    cost_bps = float(round_trip_cost_bps)
+    if not 0 <= cost_bps <= 1000:
+        raise ValueError("round_trip_cost_bps must be between 0 and 1000")
+
     with connect() as conn:
         rows = conn.execute("""
         SELECT status, COUNT(*), COUNT(DISTINCT symbol)
         FROM equity_signals GROUP BY status
+        """).fetchall()
+        resolved_rows = conn.execute("""
+        SELECT status, entry_price, target_price, stop_loss
+        FROM equity_signals
+        WHERE status IN ('TARGET_HIT','STOP_HIT')
         """).fetchall()
 
     counts = {
@@ -670,6 +1091,31 @@ def equity_signal_performance() -> dict[str, int | float | None]:
     stop_hits, stop_stocks = counts.get("STOP_HIT", (0, 0))
     resolved = target_hits + stop_hits
     accuracy = round(target_hits / resolved * 100, 2) if resolved else None
+
+    gross_returns: list[float] = []
+    net_returns: list[float] = []
+    gross_r: list[float] = []
+    net_r: list[float] = []
+    for status, entry, target, stop in resolved_rows:
+        if not entry or not target or not stop or entry <= 0 or entry <= stop:
+            continue
+        exit_price = float(target if status == "TARGET_HIT" else stop)
+        entry_price = float(entry)
+        risk_per_share = entry_price - float(stop)
+        gross_return_pct = (exit_price / entry_price - 1.0) * 100.0
+        net_return_pct = gross_return_pct - cost_bps / 100.0
+        gross_returns.append(gross_return_pct)
+        net_returns.append(net_return_pct)
+        gross_r.append((exit_price - entry_price) / risk_per_share)
+        net_r.append((exit_price - entry_price - entry_price * cost_bps / 10000.0) / risk_per_share)
+
+    net_gains = sum(value for value in net_returns if value > 0)
+    net_losses = -sum(value for value in net_returns if value < 0)
+    profit_factor = round(net_gains / net_losses, 3) if net_losses else None
+    net_win_rate = (
+        round(sum(value > 0 for value in net_returns) / len(net_returns) * 100, 2)
+        if net_returns else None
+    )
     return {
         "open_signals": counts.get("OPEN", (0, 0))[0],
         "target_hits": target_hits,
@@ -680,15 +1126,37 @@ def equity_signal_performance() -> dict[str, int | float | None]:
         "expired": counts.get("EXPIRED", (0, 0))[0],
         "resolved": resolved,
         "accuracy_percent": accuracy,
+        "cost_bps": cost_bps,
+        "priced_outcomes": len(net_returns),
+        "gross_win_rate_percent": accuracy,
+        "net_win_rate_percent": net_win_rate,
+        "gross_average_return_percent": round(sum(gross_returns) / len(gross_returns), 3) if gross_returns else None,
+        "net_average_return_percent": round(sum(net_returns) / len(net_returns), 3) if net_returns else None,
+        "gross_expectancy_r": round(sum(gross_r) / len(gross_r), 3) if gross_r else None,
+        "net_expectancy_r": round(sum(net_r) / len(net_r), 3) if net_r else None,
+        "net_profit_factor": profit_factor,
     }
 
-def list_news(limit: int = 50) -> list[dict[str, Any]]:
+def list_news(limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    if limit < 1 or offset < 0:
+        raise ValueError("limit must be positive and offset must be non-negative")
     with connect() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("""
-        SELECT * FROM news ORDER BY id DESC LIMIT ?
-        """, (limit,)).fetchall()
-        return [dict(x) for x in rows]
+        SELECT * FROM news
+        ORDER BY COALESCE(
+            published_epoch,
+            CAST(strftime('%s', fetched_at) AS REAL)
+        ) DESC, id DESC
+        LIMIT ? OFFSET ?
+        """, (limit, offset)).fetchall()
+        items = [dict(row) for row in rows]
+    for item in items:
+        item["event_categories"] = json.loads(
+            item.pop("event_categories_json", "[]") or "[]"
+        )
+        item["symbols"] = json.loads(item.pop("symbols_json", "[]") or "[]")
+    return items
 
 def list_candles(limit: int = 50) -> list[dict[str, Any]]:
     with connect() as conn:

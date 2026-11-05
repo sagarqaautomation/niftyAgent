@@ -1,0 +1,27 @@
+{
+  "report_date": "2026-10-14",
+  "source_run": "https://github.com/sagarqaautomation/niftyAgent/actions/runs/38596238095",
+  "type": "historical_walk_forward_backtest",
+  "validation_folds": 4,
+  "estimated_round_trip_cost_points": 2,
+  "baseline": {
+    "win_rate_pct": 40.83,
+    "wins": 345,
+    "resolved_trades": 845,
+    "net_profit_factor_by_fold": [0.8607, 0.8077, 0.6059, 0.8973]
+  },
+  "probability_filtered": {
+    "win_rate_pct": 42.71,
+    "wins": 123,
+    "resolved_trades": 288,
+    "net_profit_factor_by_fold": [0.6727, 0.8653, 0.7444, 0.9814]
+  },
+  "notes": [
+    "Win rates aggregate resolved trades across four out-of-sample folds.",
+    "Estimated round-trip cost is 2 index points, not a measured brokerage/slippage figure.",
+    "Probability filtering improved aggregate win rate by 1.88 percentage points but reduced trade count.",
+    "Net profit factor remained below 1 in every fold for both strategies.",
+    "Premarket features are logged but are not inputs to this backtest.",
+    "This is historical research, not a live signal. Live market status and latest signal remain unavailable."
+  ]
+}

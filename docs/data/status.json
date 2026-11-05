@@ -1,0 +1,12 @@
+{
+  "data_state": "NO_LIVE_BACKEND",
+  "market_status": "Unavailable",
+  "market_hint": "GitHub Pages is static; no live market feed is connected.",
+  "latest_signal": null,
+  "signal_time": null,
+  "walk_forward_win_rate_pct": null,
+  "resolved_trades": null,
+  "report_label": null,
+  "updated_at": null,
+  "report_url": null
+}

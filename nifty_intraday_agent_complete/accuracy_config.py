@@ -1,0 +1,68 @@
+"""v2.1 quality settings kept separate from broker credentials and legacy config."""
+
+import os
+from dataclasses import dataclass
+
+
+def _int(name: str, default: int) -> int:
+    return int(os.getenv(name, str(default)))
+
+
+def _float(name: str, default: float) -> float:
+    return float(os.getenv(name, str(default)))
+
+
+def _bool(name: str, default: bool) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+@dataclass(frozen=True)
+class QualitySettings:
+    minimum_history_bars: int = _int("MINIMUM_HISTORY_BARS", 60)
+    min_trend_adx: float = _float("MIN_TREND_ADX", 20.0)
+    strong_trend_adx: float = _float("STRONG_TREND_ADX", 25.0)
+    range_market_min_score: int = _int("RANGE_MARKET_MIN_SCORE", 8)
+    high_volatility_min_score: int = _int("HIGH_VOLATILITY_MIN_SCORE", 8)
+    high_volatility_atr_pct: float = _float("HIGH_VOLATILITY_ATR_PCT", 0.30)
+    relative_volume_threshold: float = _float("RELATIVE_VOLUME_THRESHOLD", 1.25)
+    minimum_candle_strength: float = _float("MINIMUM_CANDLE_STRENGTH", 0.65)
+    minimum_reward_risk: float = _float("MINIMUM_REWARD_RISK", 1.5)
+    # Equity BUY signals whose target is closer than this many rupees to entry are dropped.
+    equity_min_target_points: float = _float("EQUITY_MIN_TARGET_POINTS", 3.0)
+    signal_cooldown_minutes: int = _int("SIGNAL_COOLDOWN_MINUTES", 5)
+    setup_reset_bars: int = _int("SETUP_RESET_BARS", 3)
+    # Targeted v2.1 loss-cluster hypothesis: transition regimes are the
+    # weakest recurring regime, so require directional movement agreement
+    # before allowing a transition CALL/PUT. Keep disabled until walk-forward
+    # validation proves a positive out-of-sample improvement.
+    transition_require_di_alignment: bool = _bool("TRANSITION_REQUIRE_DI_ALIGNMENT", False)
+    news_max_age_minutes: int = _int("NEWS_MAX_AGE_MINUTES", 60)
+    probability_gate_enabled: bool = _bool("PROBABILITY_GATE_ENABLED", False)
+    probability_min_win_rate: float = _float("PROBABILITY_MIN_WIN_RATE", 0.60)
+    probability_min_samples: int = _int("PROBABILITY_MIN_SAMPLES", 40)
+    setup_profiles_path: str = os.getenv("SETUP_PROFILES_PATH", "data/setup_profiles.json")
+
+    # Experimental strict filter. Keep disabled by default until it proves
+    # an out-of-sample improvement in walk-forward validation.
+    # Guards learned from analysed failed signals (see failure_guard.py).
+    failure_guard_enabled: bool = _bool("FAILURE_GUARD_ENABLED", True)
+    guard_earliest_signal_minute: int = _int("GUARD_EARLIEST_SIGNAL_MINUTE", 9 * 60 + 45)
+    guard_max_five_min_adx: float = _float("GUARD_MAX_FIVE_MIN_ADX", 40.0)
+    guard_call_max_rsi: float = _float("GUARD_CALL_MAX_RSI", 80.0)
+    guard_put_min_rsi: float = _float("GUARD_PUT_MIN_RSI", 20.0)
+    guard_put_min_five_min_rsi: float = _float("GUARD_PUT_MIN_FIVE_MIN_RSI", 15.0)
+    guard_loss_streak_minutes: int = _int("GUARD_LOSS_STREAK_MINUTES", 30)
+    # Validated on 6 months of NIFTY replay (1,094 resolved signals): TRENDING
+    # signals won 50% / 46% on the first / last part of the data vs ~40% for
+    # RANGE and TRANSITION. VWAP-stretch and late-session rules did not hold up.
+    guard_require_trending_regime: bool = _bool("GUARD_REQUIRE_TRENDING_REGIME", True)
+
+    precision_mode: bool = _bool("PRECISION_MODE", False)
+    precision_min_score: int = _int("PRECISION_MIN_SCORE", 8)
+    precision_min_adx: float = _float("PRECISION_MIN_ADX", 25.0)
+    precision_require_structure: bool = _bool("PRECISION_REQUIRE_STRUCTURE", True)
+    precision_require_candle: bool = _bool("PRECISION_REQUIRE_CANDLE", True)
+    precision_require_rsi: bool = _bool("PRECISION_REQUIRE_RSI", True)
+
+
+quality_settings = QualitySettings()

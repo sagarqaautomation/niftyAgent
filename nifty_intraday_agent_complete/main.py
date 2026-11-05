@@ -1,3 +1,5 @@
+import json
+import queue
 import time
 import threading
 from collections.abc import Mapping, Sequence
@@ -7,19 +9,37 @@ import pandas as pd
 from zoneinfo import ZoneInfo
 
 from config import settings
+from accuracy_config import quality_settings as quality
+from failure_guard import failure_guard_reason
+from market_hours import is_current_session_candle, is_market_open
 from database import (
-    init_db, insert_news, insert_candles, insert_spot_candles, insert_signal,
+    init_db, insert_news, insert_candles, insert_spot_candles, insert_signal, list_signals,
     performance, resolve_with_bar, expire_signals, update_market_status,
     update_spot_status, insert_equity_signal, insert_equity_candles,
     resolve_equity_signal,
     expire_stale_equity_signals, list_equity_signals_by_status,
     resolve_equity_signal_at_price,
-    update_analysis_status, utc_now
+    update_analysis_status, utc_now, insert_premarket_snapshot,
+    # Buffered: flushed in one transaction by the equity-status-flush thread.
+    queue_equity_scan_status as update_equity_scan_status,
+    flush_equity_scan_status, update_kite_auth_status,
+    replace_equity_research_candidates,
 )
-from news_sources import fetch_all, aggregate_news
+from news_sources import (
+    aggregate_news,
+    equity_news_bias,
+    fetch_all,
+    tag_news_symbols,
+)
 from candle_engine import CandleEngine
 from signal_engine import build_signal, add_risk_levels
+from probability_engine import load_model
 from indicators import detect_candlestick_pattern_rows, detect_latest_candlestick_patterns
+from market_context import load_constituent_weights, summarize_constituent_news, summarize_constituent_returns
+from equity_research import build_research as build_equity_research
+from equity_research import select_candidates as select_equity_candidates
+from equity_research import build_discovery_universe
+from equity_research import summarize as summarize_research
 from equity_scanner import (
     build_equity_buy_signal, load_watchlist,
     resolve_equity_tokens,
@@ -32,27 +52,67 @@ CandleFrames = dict[str, pd.DataFrame]
 CandleRecord = dict[str, Any]
 Tick = Mapping[str, Any]
 
-def market_session_has_ended(now: datetime | None = None) -> bool:
-    market_now = now or datetime.now(ZoneInfo(settings.market_timezone))
-    if market_now.tzinfo is None:
-        market_now = market_now.replace(tzinfo=ZoneInfo(settings.market_timezone))
-    else:
-        market_now = market_now.astimezone(ZoneInfo(settings.market_timezone))
-    return market_now.weekday() >= 5 or market_now.time() >= datetime_time(15, 30)
+
+class _NoBrokerQuotes:
+    def quotes(self, instruments: list[str]) -> dict[str, Any]:
+        return {}
 
 
-def refresh_news() -> str:
+_live_trade_quality_model_cache: dict[str, Any] | None = None
+_live_trade_quality_model_loaded = False
+
+def live_trade_quality_model() -> dict[str, Any] | None:
+    """Load an explicitly configured offline-trained quality model once.
+
+    The model is opt-in: an unset path or invalid/missing file leaves existing
+    signal behavior unchanged. Restart the worker to load a newly trained file.
+    """
+    global _live_trade_quality_model_cache, _live_trade_quality_model_loaded
+    if _live_trade_quality_model_loaded:
+        return _live_trade_quality_model_cache
+    _live_trade_quality_model_loaded = True
+    path = settings.trade_quality_model_path
+    if not path:
+        return None
+    model = load_model(path)
+    if not model:
+        print(f"Trade-quality model not loaded from {path}; live filter remains disabled", flush=True)
+        return None
+    if not isinstance(model.get("vetoes"), list):
+        print(f"Trade-quality model at {path} has an invalid schema; live filter remains disabled", flush=True)
+        return None
+    _live_trade_quality_model_cache = model
+    print(f"Loaded trade-quality model from {path} ({model.get('samples', 0)} resolved samples)", flush=True)
+    return model
+
+
+def refresh_news(
+    aliases_by_symbol: Mapping[str, Sequence[str]] | None = None,
+) -> tuple[str, list[NewsItem]]:
     if not settings.news_enabled:
-        return "NEUTRAL"
-    items: list[NewsItem] = cast(list[NewsItem], fetch_all())
+        return "NEUTRAL", []
+    if aliases_by_symbol is None and settings.equity_scan_enabled:
+        try:
+            aliases_by_symbol = {
+                symbol: [symbol]
+                for symbol in load_watchlist(settings.equity_watchlist_path)
+            }
+        except Exception as exc:
+            print(f"Could not load equity symbols for news matching: {exc}")
+            aliases_by_symbol = {}
+    items: list[NewsItem] = fetch_all(aliases_by_symbol)
+    fetched_at = utc_now()
+    fetched_epoch = datetime.fromisoformat(fetched_at).timestamp()
     for item in items:
+        item["fetched_at"] = fetched_at
+        item["available_epoch"] = fetched_epoch
         insert_news(item)
-    return cast(str, aggregate_news(items))
+    return cast(str, aggregate_news(items, quality.news_max_age_minutes)), items
 
 def candle_record(
     timeframe: str,
     timestamp: pd.Timestamp | datetime | str,
-    row: pd.Series[Any],
+    row: pd.Series,
 ) -> CandleRecord:
     candle_time = pd.Timestamp(timestamp)
     if candle_time.tzinfo is not None:
@@ -69,7 +129,7 @@ def candle_record(
 def spot_candle_record(
     timeframe: str,
     timestamp: pd.Timestamp | datetime | str,
-    row: pd.Series[Any],
+    row: pd.Series,
 ) -> CandleRecord:
     candle_time = pd.Timestamp(timestamp)
     if candle_time.tzinfo is not None:
@@ -87,7 +147,7 @@ def equity_candle_record(
     symbol: str,
     timeframe: str,
     timestamp: pd.Timestamp | datetime | str,
-    row: pd.Series[Any],
+    row: pd.Series,
     patterns: list[dict[str, str]] | None = None,
 ) -> CandleRecord:
     return {
@@ -154,6 +214,11 @@ def process_frames(
     option_bias: str = "NEUTRAL",
     signal_instrument: str | None = None,
     spot_reference: Mapping[str, str | float] | None = None,
+    constituent_bias: str = "NEUTRAL",
+    constituent_metrics: Mapping[str, Any] | None = None,
+    constituent_news_bias: str = "NEUTRAL",
+    constituent_news_metrics: Mapping[str, Any] | None = None,
+    premarket_context: Mapping[str, Any] | None = None,
 ) -> Signal | None:
     df1 = frames["1min"]
     df5 = frames["5min"]
@@ -166,8 +231,65 @@ def process_frames(
         candle_record("5min", df5.index[-1], df5.iloc[-1]),
     ])
 
-    signal: Signal = build_signal(df1, df5, news_bias, option_bias)
+    signal: Signal = build_signal(
+        df1, df5, news_bias, option_bias,
+        constituent_bias=constituent_bias,
+        constituent_news_bias=constituent_news_bias,
+        trade_quality_model=live_trade_quality_model(),
+        premarket_context=premarket_context,
+    )
+    signal["constituent_metrics"] = dict(constituent_metrics or {})
+    signal["constituent_news_metrics"] = dict(constituent_news_metrics or {})
     signal["signal_instrument"] = signal_instrument or "NIFTY spot index"
+
+    def feature_snapshot(frame: pd.DataFrame) -> dict[str, Any]:
+        row = frame.iloc[-1]
+        fields = (
+            "open", "high", "low", "close", "volume", "ema9", "ema21",
+            "ema9_slope", "ema21_slope", "rsi14", "vwap", "atr14",
+            "atr_pct", "adx14", "plus_di14", "minus_di14",
+            "relative_volume20", "body_pct", "close_location",
+            "prior_day_high", "prior_day_low", "opening_range_high",
+            "opening_range_low",
+        )
+        snapshot: dict[str, Any] = {}
+        for field in fields:
+            value = row.get(field)
+            if value is not None and pd.notna(value):
+                snapshot[field] = float(value)
+        return snapshot
+
+    premarket = cast(dict[str, Any], signal.get("premarket_context") or {})
+    premarket_components = cast(
+        dict[str, Any], premarket.get("components") or {}
+    )
+    signal["feature_snapshot"] = {
+        "version": 3,
+        "signal_candle_time": df1.index[-1].isoformat(),
+        "market_regime": signal.get("market_regime"),
+        "technical_score": signal.get("technical_score"),
+        "context_score": signal.get("context_score"),
+        "news_bias": news_bias,
+        "option_bias": option_bias,
+        "constituent_bias": constituent_bias,
+        "constituent_metrics": dict(constituent_metrics or {}),
+        "constituent_news_bias": constituent_news_bias,
+        "constituent_news_metrics": dict(constituent_news_metrics or {}),
+        "premarket_context": premarket,
+        "pattern_confirmation": signal.get("pattern_confirmation") or [],
+        # Flat numeric candidate features simplify later CSV/model experiments.
+        "premarket_directional_score": premarket.get("directional_score"),
+        "premarket_india_vix": premarket.get("india_vix"),
+        "premarket_india_vix_change_pct": premarket.get("india_vix_change_pct"),
+        "premarket_gift_nifty_component": premarket_components.get("gift_nifty"),
+        "premarket_global_component": premarket_components.get("global_sentiment"),
+        "premarket_breadth_component": premarket_components.get("market_breadth"),
+        "premarket_news_component": premarket_components.get("news_sentiment"),
+        "premarket_volatility_high": int(premarket.get("volatility_regime") == "HIGH"),
+        "premarket_volatility_elevated": int(premarket.get("volatility_regime") == "ELEVATED"),
+        "one_minute": feature_snapshot(df1),
+        "five_minute": feature_snapshot(df5),
+    }
     signal["signal_candle_time"] = (
         spot_reference["timestamp"] if spot_reference else df1.index[-1].isoformat()
     )
@@ -187,6 +309,89 @@ def process_frames(
 
 def main() -> None:
     init_db()
+    news_items: list[NewsItem] = []
+    constituent_weights = load_constituent_weights(settings.nifty50_weights_path)
+    premarket_context_state: dict[str, Any] = {}
+    premarket_lock = threading.RLock()
+    premarket_stop = threading.Event()
+    premarket_broker: dict[str, Any] = {"client": _NoBrokerQuotes()}
+
+    def refresh_premarket_loop() -> None:
+        nonlocal news_items
+        if not settings.premarket_enabled:
+            print("Pre-market intelligence is disabled (PREMARKET_ENABLED=false)")
+            return
+
+        from premarket_collector import collect_live_premarket_context
+
+        last_news_refresh = 0.0
+        while not premarket_stop.is_set():
+            market_now = datetime.now(ZoneInfo(settings.market_timezone))
+            in_collection_window = (
+                market_now.weekday() < 5
+                and datetime_time(8, 0) <= market_now.time() < datetime_time(15, 30)
+            )
+            if not in_collection_window:
+                premarket_stop.wait(60)
+                continue
+
+            if (
+                settings.news_enabled
+                and time.monotonic() - last_news_refresh >= settings.news_refresh_seconds
+            ):
+                try:
+                    _, news_items = refresh_news()
+                    last_news_refresh = time.monotonic()
+                except Exception as exc:
+                    print(f"Pre-market news refresh failed: {type(exc).__name__}: {exc}", flush=True)
+
+            try:
+                snapshot = collect_live_premarket_context(
+                    premarket_broker["client"],
+                    news_items=news_items,
+                    weights=constituent_weights,
+                )
+                insert_premarket_snapshot(snapshot)
+                with premarket_lock:
+                    premarket_context_state.clear()
+                    premarket_context_state.update(snapshot)
+                print(
+                    "[PREMARKET]",
+                    f"time={snapshot.get('observed_at')}",
+                    f"bias={snapshot.get('directional_bias')}",
+                    f"score={snapshot.get('directional_score')}",
+                    f"vix={snapshot.get('india_vix')}",
+                    f"volatility={snapshot.get('volatility_regime')}",
+                    f"components={snapshot.get('available_components')}",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(f"Pre-market refresh failed: {type(exc).__name__}: {exc}", flush=True)
+            premarket_stop.wait(settings.premarket_refresh_seconds)
+
+    if settings.premarket_enabled and settings.live_market_data:
+        threading.Thread(
+            target=refresh_premarket_loop,
+            name="premarket-context-refresh",
+            daemon=True,
+        ).start()
+
+    if settings.live_market_data:
+        while not is_market_open():
+            closed_reason = (
+                "NSE market is closed. Live market data will start at 09:00 IST "
+                "on the next weekday session."
+            )
+            update_market_status(
+                "CLOSED",
+                last_error="",
+                analysis_state="CLOSED",
+                analysis_reason=closed_reason,
+                analysis_updated_at=utc_now(),
+            )
+            print(closed_reason, flush=True)
+            time.sleep(30)
+    
     update_market_status(
         "STARTING", last_error="", one_minute_bars=0, five_minute_bars=0,
         analysis_state="WARMING_UP", analysis_score=0,
@@ -200,13 +405,13 @@ def main() -> None:
 
     if not settings.live_market_data:
         if settings.news_enabled:
-            bias = refresh_news()
+            bias, _ = refresh_news()
             print("Current news bias:", bias)
         print("Performance:", performance())
         print("\nProject is ready. Set LIVE_MARKET_DATA=true after configuring the broker adapter.")
         return
 
-    if market_session_has_ended():
+    if not is_market_open():
         expire_stale_equity_signals(expire_all_open=True)
         closed_reason = "NSE session is closed; live market data was not started."
         update_market_status(
@@ -219,9 +424,10 @@ def main() -> None:
         print(closed_reason, flush=True)
         return
 
+    news_bias = "NEUTRAL"
     if settings.news_enabled:
-        bias = refresh_news()
-        print("Current news bias:", bias)
+        news_bias, news_items = refresh_news()
+        print("Current news bias:", news_bias)
 
     print("Performance:", performance())
 
@@ -231,10 +437,22 @@ def main() -> None:
     spot_engine: Any = CandleEngine()
     try:
         broker: Any = KiteMarketData().connect()
+        # connect() verifies the saved access token against Kite's authenticated
+        # profile endpoint before we report authentication success.
+        update_kite_auth_status(
+            "SUCCESS", "Kite REST authentication verified successfully."
+        )
+        print("Kite authentication: SUCCESS (REST profile check)", flush=True)
+        premarket_broker["client"] = broker
     except Exception as exc:
+        # Keep the UI useful even when token validation fails. Avoid printing
+        # credentials; show only the exception type and broker-provided message.
+        auth_reason = f"{type(exc).__name__}: {exc}"
+        update_kite_auth_status("FAILED", auth_reason)
+        print(f"Kite authentication: FAILED — {auth_reason}", flush=True)
         update_market_status(
-            "ERROR", last_error=str(exc), analysis_state="ERROR",
-            analysis_reason=f"Broker connection failed: {exc}",
+            "ERROR", last_error=auth_reason, analysis_state="ERROR",
+            analysis_reason=f"Broker connection/authentication failed: {auth_reason}",
             analysis_updated_at=utc_now(),
         )
         raise
@@ -246,12 +464,55 @@ def main() -> None:
             future: dict[str, Any] = broker.get_front_future(settings.underlying)
             instrument_token = int(future["instrument_token"])
         spot_token = int(settings.nifty_instrument_token) if settings.nifty_instrument_token else None
+        if spot_token is None:
+            # Resolve the NSE NIFTY 50 index token automatically when the
+            # optional .env token is absent. This enables index WebSocket ticks
+            # and historical spot warm-up instead of relying on REST polling
+            # alone (which cannot build a warmed spot ATR by itself).
+            try:
+                nse_index_instruments = broker.get_instruments("NSE")
+                nifty_index = next(
+                    (
+                        item for item in nse_index_instruments
+                        if str(item.get("instrument_type", "")).upper() == "INDEX"
+                        and (
+                            str(item.get("tradingsymbol", "")).strip().upper() == "NIFTY 50"
+                            or str(item.get("name", "")).strip().upper() == "NIFTY 50"
+                        )
+                        and item.get("instrument_token") is not None
+                    ),
+                    None,
+                )
+                if nifty_index:
+                    spot_token = int(nifty_index["instrument_token"])
+                    print(
+                        "Resolved NIFTY 50 index token automatically:",
+                        spot_token,
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "NIFTY 50 index token not found in Kite NSE instruments; "
+                        "spot REST fallback will be used. Set NIFTY_INSTRUMENT_TOKEN "
+                        "if index history is unavailable.",
+                        flush=True,
+                    )
+            except Exception as exc:
+                print(
+                    f"Could not auto-resolve NIFTY 50 index token: {type(exc).__name__}: {exc}",
+                    flush=True,
+                )
         equity_tokens_by_symbol: dict[str, int] = {}
         equity_exchange_by_symbol: dict[str, str] = {}
+        equity_news_aliases: dict[str, list[str]] = {}
+        discovery_tokens: dict[str, int] = {}
+        discovery_names: dict[str, str] = {}
+        instrument_alias_sources: list[dict[str, Any]] = []
         if settings.equity_scan_enabled:
             try:
                 equity_symbols = load_watchlist(settings.equity_watchlist_path)
                 equity_instruments = broker.get_instruments("NSE")
+                instrument_alias_sources.extend(equity_instruments)
                 equity_tokens_by_symbol, missing_equities = resolve_equity_tokens(
                     equity_instruments, equity_symbols
                 )
@@ -261,6 +522,7 @@ def main() -> None:
                 if missing_equities:
                     try:
                         bse_instruments = broker.get_instruments("BSE")
+                        instrument_alias_sources.extend(bse_instruments)
                         bse_tokens, missing_equities = resolve_equity_tokens(
                             bse_instruments, missing_equities, exchange="BSE"
                         )
@@ -276,9 +538,34 @@ def main() -> None:
                 )
                 if missing_equities:
                     print("Unmatched equity symbols:", ", ".join(missing_equities))
+                equity_news_aliases = {
+                    symbol: [symbol] for symbol in equity_tokens_by_symbol
+                }
+                for instrument in instrument_alias_sources:
+                    symbol = str(instrument.get("tradingsymbol", "")).upper()
+                    if symbol not in equity_news_aliases:
+                        continue
+                    company_name = str(instrument.get("name", "")).strip()
+                    if company_name:
+                        equity_news_aliases[symbol].append(company_name)
+                if settings.equity_discovery_enabled:
+                    discovery_tokens, discovery_names = build_discovery_universe(
+                        equity_instruments, exclude=equity_news_aliases
+                    )
+                    print(
+                        f"Equity discovery universe: {len(discovery_tokens)} additional "
+                        f"NSE stocks (max {settings.equity_discovery_max_additions} added per session)",
+                        flush=True,
+                    )
             except Exception as exc:
                 print(f"Equity scan setup failed; continuing with NIFTY only: {exc}")
                 equity_tokens_by_symbol = {}
+                equity_news_aliases = {}
+                discovery_tokens, discovery_names = {}, {}
+        if news_items and equity_news_aliases:
+            tag_news_symbols(news_items, equity_news_aliases)
+            for item in news_items:
+                insert_news(item)
         equity_symbol_by_token = {
             token: symbol for symbol, token in equity_tokens_by_symbol.items()
         }
@@ -286,7 +573,10 @@ def main() -> None:
         if spot_token is not None and spot_token != instrument_token:
             subscribed_tokens.append(spot_token)
         subscribed_tokens.extend(equity_tokens_by_symbol.values())
-        broker.set_instrument_tokens(subscribed_tokens)
+        broker.set_instrument_tokens(
+            subscribed_tokens,
+            full_mode_tokens=[t for t in subscribed_tokens if t not in equity_symbol_by_token],
+        )
         update_market_status(
             "STARTING", signal_instrument="NIFTY spot index",
             analysis_state="WARMING_UP",
@@ -302,7 +592,7 @@ def main() -> None:
         raise
 
     equity_engines: dict[str, Any] = {
-        symbol: CandleEngine() for symbol in equity_tokens_by_symbol
+        symbol: CandleEngine(refresh_on_rollover_only=True) for symbol in equity_tokens_by_symbol
     }
     equity_engine_locks = {
         symbol: threading.RLock() for symbol in equity_tokens_by_symbol
@@ -310,8 +600,197 @@ def main() -> None:
     last_equity_processed: dict[str, pd.Timestamp] = {}
     last_equity_persisted_five_minute: dict[str, pd.Timestamp] = {}
     active_equity_setups: set[str] = set()
+    candidate_state: dict[str, Any] = {
+        "source": None, "symbols": {}, "prices": {}, "running": False,
+    }
+    dynamic_symbols: set[str] = set()
+    dynamic_lock = threading.Lock()
+
+    def add_dynamic_equity(symbol: str) -> bool:
+        """Start scanning a stock outside the watchlist: warm its candles,
+        route its ticks, then subscribe it on the live WebSocket."""
+        token = discovery_tokens.get(symbol)
+        if token is None or symbol in equity_tokens_by_symbol:
+            return False
+        with dynamic_lock:
+            if len(dynamic_symbols) >= settings.equity_discovery_max_additions:
+                return False
+            dynamic_symbols.add(symbol)
+        equity_engines[symbol] = CandleEngine(refresh_on_rollover_only=True)
+        equity_engine_locks[symbol] = threading.RLock()
+        warm_equity_history({symbol: token})
+        if symbol not in last_equity_processed:
+            with dynamic_lock:
+                dynamic_symbols.discard(symbol)
+            equity_engines.pop(symbol, None)
+            equity_engine_locks.pop(symbol, None)
+            return False
+        equity_news_aliases[symbol] = [symbol, discovery_names.get(symbol, symbol)]
+        equity_exchange_by_symbol[symbol] = "NSE"
+        equity_tokens_by_symbol[symbol] = token
+        equity_symbol_by_token[token] = symbol
+        try:
+            broker.add_instrument_tokens([token])
+        except Exception as exc:
+            print(f"[EQUITY DISCOVERY] subscribe failed for {symbol}: {type(exc).__name__}: {exc}", flush=True)
+        update_equity_scan_status(
+            symbol, instrument_token=token,
+            rejection_reason="Added from news discovery; waiting for live tick",
+        )
+        print(
+            f"[EQUITY DISCOVERY] added {symbol} ({discovery_names.get(symbol, '')}); "
+            f"{len(dynamic_symbols)}/{settings.equity_discovery_max_additions} slots used",
+            flush=True,
+        )
+        return True
+
+    def publish_research_candidates(
+        items: list[NewsItem], candidates: dict[str, str]
+    ) -> list[dict[str, Any]]:
+        # Runs off the tick thread: fundamentals lookups are network calls.
+        rows: list[dict[str, Any]] = []
+        picked = list(candidates.items())[:40]
+        prices = candidate_state["prices"]
+        missing = [symbol for symbol, _ in picked if symbol not in prices]
+        if missing:
+            try:
+                instruments = [
+                    f"{equity_exchange_by_symbol.get(symbol, 'NSE')}:{symbol}" for symbol in missing
+                ]
+                quotes = broker.quotes(instruments)
+                for symbol, instrument in zip(missing, instruments):
+                    last_price = (quotes.get(instrument) or {}).get("last_price")
+                    if last_price:
+                        prices[symbol] = float(last_price)
+            except Exception as exc:
+                print(f"[EQUITY RESEARCH] quote lookup failed: {type(exc).__name__}: {exc}", flush=True)
+        try:
+            for symbol, catalyst in picked:
+                price = float(prices.get(symbol, 0.0))
+                discovered = symbol in discovery_names
+                research = build_equity_research(
+                    symbol, items,
+                    equity_news_aliases.get(symbol, [discovery_names.get(symbol, symbol)]),
+                    price,
+                    news_key=discovery_names.get(symbol) if discovered else None,
+                )
+                rows.append({
+                    "symbol": symbol,
+                    "source": "News discovery" if discovered else "Watchlist",
+                    "verdict": research["verdict"],
+                    "research_score": research["score"],
+                    "news_score": research["news"]["score"],
+                    "analyst_score": research["analysts"]["score"],
+                    "fundamentals_score": research["fundamentals"]["score"],
+                    "catalyst": catalyst,
+                    "analyst_upside_pct": research["analysts"]["avg_target_upside_pct"],
+                    "basis": summarize_research(research),
+                    "research_json": json.dumps(research, default=str),
+                })
+            replace_equity_research_candidates(rows)
+        except Exception as exc:
+            print(f"[EQUITY RESEARCH] publish failed: {type(exc).__name__}: {exc}", flush=True)
+        return rows
+
+    def refresh_equity_candidates(items: list[NewsItem]) -> None:
+        try:
+            candidates = select_equity_candidates(
+                items,
+                dict(equity_news_aliases),
+                name_only=discovery_names if discovery_tokens else None,
+            )
+            candidate_state["symbols"] = candidates
+            rows = publish_research_candidates(items, candidates)
+            if settings.equity_discovery_enabled:
+                # Best-researched stocks get the limited subscription slots first.
+                for row in sorted(rows, key=lambda r: -int(r["research_score"])):
+                    symbol = str(row["symbol"])
+                    if row["verdict"] == "SUPPORTIVE" and symbol not in equity_tokens_by_symbol:
+                        add_dynamic_equity(symbol)
+        except Exception as exc:
+            print(f"[EQUITY RESEARCH] candidate refresh failed: {type(exc).__name__}: {exc}", flush=True)
+        finally:
+            candidate_state["running"] = False
     equity_cumulative_volumes: dict[str, float] = {}
     equity_volume_dates: dict[str, Any] = {}
+    latest_equity_returns_pct: dict[str, float] = {}
+    last_equity_status_write: dict[str, float] = {}
+    last_equity_learning_check = 0.0
+    def warm_equity_history(targets: Mapping[str, int] | None = None) -> None:
+        warm_items = list((targets if targets is not None else equity_tokens_by_symbol).items())
+        # Persist scanner status for every configured symbol, including symbols
+        # that have not produced a qualifying BUY signal.
+        for symbol, token in warm_items:
+            update_equity_scan_status(
+                symbol,
+                instrument_token=token,
+                rejection_reason="Loading historical candles for warm-up",
+            )
+    
+        # Warm each equity candle engine with recent Kite minute history before
+        # evaluating live setups. This avoids waiting for the scanner to build all
+        # indicator history from fresh ticks after startup.
+        if equity_engines:
+            equity_history_end = pd.Timestamp.now(tz=settings.market_timezone).to_pydatetime()
+            equity_history_start = equity_history_end - timedelta(days=5)
+            for equity_index, (symbol, token) in enumerate(warm_items):
+                # Stay under broker historical-data request limits while warming a
+                # large watchlist (typically up to 200 symbols).
+                if equity_index:
+                    time.sleep(0.35)
+                try:
+                    equity_history = broker.historical_data(
+                        token, equity_history_start, equity_history_end, "minute"
+                    )
+                    if not equity_history:
+                        update_equity_scan_status(
+                            symbol, instrument_token=token,
+                            rejection_reason="Kite returned no historical candles",
+                        )
+                        print(f"Equity warm-up: {symbol} returned no historical candles", flush=True)
+                        continue
+                    with equity_engine_locks[symbol]:
+                        equity_frames = equity_engines[symbol].load_history(equity_history)
+                    historical_equity_rows: list[CandleRecord] = []
+                    for timeframe, frame in equity_frames.items():
+                        historical_equity_rows.extend(
+                            equity_candle_records(symbol, timeframe, frame)
+                        )
+                    insert_equity_candles(historical_equity_rows)
+                    current_minute = pd.Timestamp.now(tz=settings.market_timezone).floor("min")
+                    closed_minutes = equity_frames["1min"].loc[
+                        equity_frames["1min"].index < current_minute
+                    ]
+                    if not closed_minutes.empty:
+                        last_equity_processed[symbol] = cast(pd.Timestamp, closed_minutes.index[-1])
+                    update_equity_scan_status(
+                        symbol,
+                        instrument_token=token,
+                        one_minute_bars=int(len(equity_frames["1min"])),
+                        five_minute_bars=int(len(equity_frames["5min"])),
+                        rejection_reason="Historical warm-up complete; waiting for live tick",
+                    )
+                    print(
+                        f"Equity warm-up: {symbol} loaded "
+                        f"{len(equity_frames['1min'])} 1m / {len(equity_frames['5min'])} 5m bars",
+                        flush=True,
+                    )
+                except Exception as exc:
+                    update_equity_scan_status(
+                        symbol,
+                        instrument_token=token,
+                        rejection_reason=f"Historical warm-up failed: {type(exc).__name__}: {exc}",
+                    )
+                    print(
+                        f"Equity warm-up failed for {symbol}: {type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+    
+    
+    if constituent_weights:
+        print(f"Loaded NIFTY constituent weights for {len(constituent_weights)} symbols")
+    else:
+        print("NIFTY weights file unavailable; constituent context will use equal-weight breadth")
 
     try:
         history_end = pd.Timestamp.now(tz=settings.market_timezone).to_pydatetime()
@@ -378,7 +857,6 @@ def main() -> None:
         )
         print("Historical warm-up error:", exc)
 
-    news_bias = "NEUTRAL"
     last_status_write = 0.0
     last_spot_status_write = 0.0
     last_processed_minute = None
@@ -390,13 +868,15 @@ def main() -> None:
     last_resolved_spot_minute = None
     latest_future_price = None
     latest_future_time = None
-    triggered_direction = None
+    last_alert_direction: str | None = None
+    last_alert_bar: pd.Timestamp | None = None
+    setup_reset_count = 0
 
     def on_status(state: str, detail: str | None = None) -> None:
         update_market_status(
             state,
             connected_at=utc_now() if state == "CONNECTED" else None,
-            last_error=detail if state in {"ERROR", "DISCONNECTED"} else None,
+            last_error=detail if state in {"ERROR", "DISCONNECTED", "RECONNECTING"} else ("" if state == "CONNECTED" else None),
         )
 
     spot_lock = threading.RLock()
@@ -437,27 +917,49 @@ def main() -> None:
                     if spot_bar_time != last_resolved_spot_minute:
                         last_resolved_spot_minute = spot_bar_time
                         spot_bar = closed_spot.iloc[-1]
-                        resolve_with_bar({
-                            "open": spot_bar["open"],
-                            "high": spot_bar["high"],
-                            "low": spot_bar["low"],
-                            "close": spot_bar["close"],
-                        })
+                        resolve_with_bar(
+                            {
+                                "open": spot_bar["open"],
+                                "high": spot_bar["high"],
+                                "low": spot_bar["low"],
+                                "close": spot_bar["close"],
+                            },
+                            bar_timestamp=spot_bar_time.to_pydatetime(),
+                        )
                         expire_signals()
+                        # Research-only online learning: fit a candidate only from
+                        # resolved, point-in-time signal snapshots. This never changes
+                        # the active model and never places orders.
+                        try:
+                            from live_learning import maybe_train_candidate
+                            learning_report = maybe_train_candidate()
+                            if learning_report and learning_report.get("status") != "INSUFFICIENT_DATA":
+                                print(
+                                    "[LIVE LEARNING]",
+                                    f"status={learning_report.get('status')}",
+                                    f"resolved={learning_report.get('resolved_samples')}",
+                                    f"holdout={learning_report.get('holdout', {}).get('samples', 0)}",
+                                    "active_model_changed=false",
+                                    flush=True,
+                                )
+                        except Exception as exc:
+                            # Training failures must not interrupt live market collection.
+                            print(f"[LIVE LEARNING] candidate training skipped: {type(exc).__name__}: {exc}", flush=True)
 
             now = time.monotonic()
             if now - last_spot_status_write >= 1:
                 update_spot_status(latest_spot_price, latest_spot_time)
                 last_spot_status_write = now
 
-    def on_ticks(ticks: Sequence[Tick]) -> None:
+    def process_ticks(ticks: Sequence[Tick]) -> None:
         nonlocal news_bias, last_status_write, last_processed_minute
         nonlocal last_spot_status_write
         nonlocal last_cumulative_volume, last_volume_date
         nonlocal latest_spot_price, latest_spot_time
         nonlocal latest_future_price, latest_future_time
         nonlocal latest_spot_atr, last_resolved_spot_minute
-        nonlocal triggered_direction
+        nonlocal last_alert_direction, last_alert_bar, setup_reset_count
+        nonlocal last_equity_learning_check
         for tick in ticks:
             tick_token = tick.get("instrument_token")
             equity_symbol = (
@@ -504,7 +1006,23 @@ def main() -> None:
 
                 equity_engine = equity_engines.get(equity_symbol)
                 if equity_engine is None:
+                    update_equity_scan_status(
+                        equity_symbol,
+                        instrument_token=int(tick_token) if tick_token is not None else None,
+                        last_price=float(equity_price),
+                        last_tick_at=equity_time.isoformat(),
+                        rejection_reason="No candle engine is configured for this symbol",
+                    )
                     continue
+                status_now = time.monotonic()
+                if status_now - last_equity_status_write.get(equity_symbol, 0.0) >= 2:
+                    update_equity_scan_status(
+                        equity_symbol,
+                        instrument_token=int(tick_token) if tick_token is not None else None,
+                        last_price=float(equity_price),
+                        last_tick_at=equity_time.isoformat(),
+                    )
+                    last_equity_status_write[equity_symbol] = status_now
                 try:
                     with equity_engine_locks[equity_symbol]:
                         equity_frames: CandleFrames = equity_engine.add_tick(
@@ -526,10 +1044,15 @@ def main() -> None:
                 if closed_equity_minutes.empty:
                     continue
                 closed_equity_time = cast(pd.Timestamp, closed_equity_minutes.index[-1])
+                if len(closed_equity_minutes) >= 2:
+                    previous_close = float(closed_equity_minutes.iloc[-2]["close"])
+                    current_close = float(closed_equity_minutes.iloc[-1]["close"])
+                    if previous_close > 0:
+                        latest_equity_returns_pct[equity_symbol] = ((current_close / previous_close) - 1.0) * 100.0
                 if last_equity_processed.get(equity_symbol) == closed_equity_time:
                     continue
                 last_equity_processed[equity_symbol] = closed_equity_time
-                equity_bar: pd.Series[Any] = closed_equity_minutes.iloc[-1]
+                equity_bar: pd.Series = closed_equity_minutes.iloc[-1]
                 equity_candle_rows = [
                     equity_candle_record(
                         equity_symbol,
@@ -564,18 +1087,90 @@ def main() -> None:
                     for key in ("open", "high", "low", "close")
                 }, closed_equity_time.to_pydatetime())
 
+                # Check the research-only equity learner at most once every
+                # five minutes, not once per stock tick. It trains only from
+                # completed target/stop outcomes and never promotes a model.
+                learning_now = time.monotonic()
+                if learning_now - last_equity_learning_check >= 300:
+                    last_equity_learning_check = learning_now
+                    try:
+                        from equity_live_learning import maybe_train_candidate as maybe_train_equity_candidate
+                        equity_learning_report = maybe_train_equity_candidate()
+                        if equity_learning_report and equity_learning_report.get("status") != "INSUFFICIENT_DATA":
+                            print(
+                                "[EQUITY LEARNING]",
+                                f"status={equity_learning_report.get('status')}",
+                                f"resolved={equity_learning_report.get('resolved_samples')}",
+                                "active_model_changed=false",
+                                flush=True,
+                            )
+                    except Exception as exc:
+                        print(
+                            f"[EQUITY LEARNING] candidate training skipped: {type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
+
+                # Refresh research and news-discovered symbols as optional context.
+                # Kite technical evaluation below always runs for subscribed stocks.
+                if candidate_state["source"] is not news_items and not candidate_state["running"]:
+                    candidate_state["source"] = news_items
+                    candidate_state["running"] = True
+                    threading.Thread(
+                        target=refresh_equity_candidates,
+                        args=(list(news_items),),
+                        name="equity-candidates",
+                        daemon=True,
+                    ).start()
+                scanner_diagnostic: dict[str, Any] = {}
                 equity_signal = build_equity_buy_signal(
                     equity_symbol,
                     equity_frames,
                     float(equity_price),
-                    news_bias,
+                    "NEUTRAL",
+                    premarket_context=None,
+                    diagnostics=scanner_diagnostic,
+                    live_price_time=equity_time.isoformat(),
                 )
+                equity_one_minute_bars = int(len(equity_frames["1min"]))
+                equity_five_minute_bars = int(len(equity_frames["5min"]))
                 if equity_signal is None:
                     active_equity_setups.discard(equity_symbol)
+                    update_equity_scan_status(
+                        equity_symbol,
+                        instrument_token=int(tick_token) if tick_token is not None else None,
+                        last_price=float(equity_price),
+                        last_tick_at=equity_time.isoformat(),
+                        one_minute_bars=equity_one_minute_bars,
+                        five_minute_bars=equity_five_minute_bars,
+                        last_evaluated_at=utc_now(),
+                        rejection_reason=str(
+                            scanner_diagnostic.get("reason", "No qualifying BUY setup")
+                        ),
+                    )
                     continue
                 if spot_quote_age_seconds(equity_time) > 10:
+                    update_equity_scan_status(
+                        equity_symbol,
+                        instrument_token=int(tick_token) if tick_token is not None else None,
+                        last_price=float(equity_price),
+                        last_tick_at=equity_time.isoformat(),
+                        one_minute_bars=equity_one_minute_bars,
+                        five_minute_bars=equity_five_minute_bars,
+                        last_evaluated_at=utc_now(),
+                        rejection_reason="Quote is stale; signal suppressed",
+                    )
                     print(f"Skipping stale {equity_symbol} quote")
                     continue
+                update_equity_scan_status(
+                    equity_symbol,
+                    instrument_token=int(tick_token) if tick_token is not None else None,
+                    last_price=float(equity_price),
+                    last_tick_at=equity_time.isoformat(),
+                    one_minute_bars=equity_one_minute_bars,
+                    five_minute_bars=equity_five_minute_bars,
+                    last_evaluated_at=utc_now(),
+                    rejection_reason="BUY setup passed all scanner filters",
+                )
                 if equity_symbol in active_equity_setups:
                     continue
                 signal_id = insert_equity_signal(equity_signal)
@@ -603,6 +1198,19 @@ def main() -> None:
                 tick_time = tick_time.tz_convert(settings.market_timezone)
             latest_future_price = float(price)
             latest_future_time = tick_time
+
+            # Track every received futures tick, not only ticks that produce a
+            # new candle. Otherwise the dashboard can falsely show a stale feed
+            # while the WebSocket is still delivering ticks.
+            tick_now = time.monotonic()
+            if tick_now - last_status_write >= 1:
+                update_market_status(
+                    "LIVE",
+                    last_tick_at=utc_now(),
+                    last_exchange_tick_at=tick_time.isoformat(),
+                    last_error="",
+                )
+                last_status_write = tick_now
 
             cumulative_volume = float(tick.get("volume_traded") or 0)
             tick_date = tick_time.date()
@@ -653,9 +1261,29 @@ def main() -> None:
                 closed_five = closed_five.loc[closed_five.index < current_five_bucket]
                 if not closed_minute.empty:
                     closed_timestamp = closed_minute.index[-1]
+                    if not is_current_session_candle(
+                        closed_timestamp.to_pydatetime(),
+                        tick_time.to_pydatetime(),
+                    ):
+                        update_analysis_status(
+                            "WARMING_UP",
+                            None,
+                            "Waiting for a closed candle from today's NSE session.",
+                        )
+                        continue
                     if closed_timestamp != last_processed_minute:
                         last_processed_minute = closed_timestamp
                         try:
+                            constituent_metrics = summarize_constituent_returns(latest_equity_returns_pct, constituent_weights)
+                            constituent_bias = str(constituent_metrics["bias"])
+                            constituent_news_metrics = summarize_constituent_news(
+                                news_items,
+                                constituent_weights,
+                                quality.news_max_age_minutes,
+                            )
+                            constituent_news_bias = str(constituent_news_metrics["bias"])
+                            with premarket_lock:
+                                current_premarket_context = dict(premarket_context_state)
                             result = process_frames(
                                 {"1min": closed_minute, "5min": closed_five},
                                 news_bias,
@@ -667,6 +1295,11 @@ def main() -> None:
                                 }
                                 if latest_spot_price is not None and latest_spot_time is not None
                                 else None,
+                                constituent_bias,
+                                constituent_metrics,
+                                constituent_news_bias,
+                                constituent_news_metrics,
+                                current_premarket_context,
                             )
                         except Exception as exc:
                             update_analysis_status(
@@ -677,15 +1310,76 @@ def main() -> None:
                         if not result:
                             continue
                         direction = result["signal"]
-                        if direction == "WAIT":
-                            triggered_direction = None
+                        print(
+                            "[NIFTY ANALYSIS]",
+                            f"time={closed_timestamp.isoformat()}",
+                            f"signal={direction}",
+                            f"technical={result.get('technical_score')}",
+                            f"context={result.get('context_score')}",
+                            f"regime={result.get('market_regime')}",
+                            f"news={news_bias}",
+                            f"constituent={constituent_bias}",
+                            f"constituent_news={constituent_news_bias}",
+                            f"weighted_news_score={constituent_news_metrics.get('weighted_score', 0)}",
+                            f"breadth={constituent_metrics.get('advancers', 0)}/{constituent_metrics.get('constituents_seen', 0)}",
+                            f"constituent_method={constituent_metrics.get('weighting', 'unavailable')}",
+                            f"candle_score={result.get('candlestick_score', 0)}",
+                            f"patterns={result.get('pattern_confirmation', [])}",
+                            f"reason={result.get('reason', '')}",
+                            flush=True,
+                        )
+
+                        # Do not alert on setups that cannot reasonably complete
+                        # before the NSE session closes. Keep this aligned with the
+                        # backtester so live and historical behavior use the same
+                        # end-of-day cutoff.
+                        session_end_minutes = 15 * 60 + 30
+                        cutoff_minutes = session_end_minutes - int(settings.signal_expiry_minutes)
+                        signal_cutoff = datetime_time(cutoff_minutes // 60, cutoff_minutes % 60)
+                        if closed_timestamp.time() >= signal_cutoff:
+                            update_analysis_status(
+                                "BLOCKED",
+                                result.get("technical_score"),
+                                "New signal blocked because the remaining NSE session is shorter than the configured signal expiry window.",
+                            )
                             continue
 
-                        if triggered_direction == direction:
+                        if direction == "WAIT":
+                            setup_reset_count += 1
+                            if setup_reset_count >= quality.setup_reset_bars:
+                                last_alert_direction = None
+                            continue
+
+                        setup_reset_count = 0
+                        if last_alert_direction == direction:
                             update_analysis_status(
                                 f"{direction}_TRIGGERED", result["technical_score"],
-                                f"{direction} alert already sent for this setup; waiting for setup reset.",
+                                f"{direction} setup is still active; waiting for a reset before another alert.",
                             )
+                            continue
+
+                        if (
+                            last_alert_bar is not None
+                            and closed_timestamp - last_alert_bar
+                            < pd.Timedelta(minutes=quality.signal_cooldown_minutes)
+                        ):
+                            update_analysis_status(
+                                "COOLDOWN", result["technical_score"],
+                                f"New {direction} setup blocked by {quality.signal_cooldown_minutes}-minute signal cooldown.",
+                            )
+                            continue
+
+                        guard_reason = failure_guard_reason(
+                            direction,
+                            closed_timestamp.to_pydatetime(),
+                            result.get("feature_snapshot") or {},
+                            list_signals(10),
+                        )
+                        if guard_reason:
+                            update_analysis_status(
+                                "BLOCKED", result.get("technical_score"), guard_reason
+                            )
+                            print(f"[FAILURE GUARD] {direction} blocked: {guard_reason}", flush=True)
                             continue
 
                         if latest_spot_price is None or latest_spot_time is None:
@@ -741,12 +1435,65 @@ def main() -> None:
                             update_analysis_status(
                                 direction, signal["technical_score"], signal["reason"]
                             )
-                        triggered_direction = direction
+                        last_alert_direction, last_alert_bar = direction, closed_timestamp
                         print("SIGNAL:", signal)
+
+    # The WebSocket reactor thread must never block, or NIFTY ticks go stale.
+    # NIFTY futures/spot ticks are handled inline; the heavy 300-symbol equity
+    # scan runs on its own worker thread fed by a bounded queue.
+    equity_tick_queue: queue.Queue[Sequence[Tick]] = queue.Queue(maxsize=200)
+
+    def equity_tick_worker() -> None:
+        while True:
+            batch = equity_tick_queue.get()
+            try:
+                process_ticks(batch)
+            except Exception as exc:
+                print(f"Equity tick worker error: {type(exc).__name__}: {exc}", flush=True)
+
+    threading.Thread(
+        target=equity_tick_worker, name="equity-tick-worker", daemon=True
+    ).start()
+
+    def equity_status_flusher() -> None:
+        while True:
+            time.sleep(2)
+            try:
+                flush_equity_scan_status()
+            except Exception as exc:
+                print(f"Equity status flush failed: {type(exc).__name__}: {exc}", flush=True)
+
+    threading.Thread(
+        target=equity_status_flusher, name="equity-status-flush", daemon=True
+    ).start()
+
+    def on_ticks(ticks: Sequence[Tick]) -> None:
+        nifty_ticks: list[Tick] = []
+        equity_ticks: list[Tick] = []
+        for tick in ticks:
+            token = tick.get("instrument_token")
+            if token is not None and int(token) in equity_symbol_by_token:
+                equity_ticks.append(tick)
+            else:
+                nifty_ticks.append(tick)
+        if equity_ticks:
+            try:
+                equity_tick_queue.put_nowait(equity_ticks)
+            except queue.Full:
+                pass  # Drop stale equity ticks rather than delay the NIFTY feed.
+        if nifty_ticks:
+            process_ticks(nifty_ticks)
 
     broker.on_status(on_status)
     broker.on_tick(on_ticks)
     broker.start()
+    # Do not let a large equity watchlist delay NIFTY futures warm-up or
+    # WebSocket startup. Equity history is loaded in the background.
+    threading.Thread(
+        target=warm_equity_history,
+        name="equity-history-warmup",
+        daemon=True,
+    ).start()
 
     stop_spot_refresh = threading.Event()
 
@@ -754,7 +1501,7 @@ def main() -> None:
         last_attempt = 0.0
         last_error_at = 0.0
         while not stop_spot_refresh.wait(1):
-            if market_session_has_ended():
+            if not is_market_open():
                 break
             now = time.monotonic()
             if now - last_attempt < 5:
@@ -781,7 +1528,7 @@ def main() -> None:
     def reconcile_open_equity_signals() -> None:
         last_error_at = 0.0
         while not stop_equity_reconcile.wait(5):
-            if market_session_has_ended():
+            if not is_market_open():
                 break
             expire_stale_equity_signals()
             open_signals = list_equity_signals_by_status("OPEN", 500)
@@ -821,53 +1568,19 @@ def main() -> None:
         daemon=True,
     ).start()
 
-    equity_history_end = pd.Timestamp.now(tz=settings.market_timezone).to_pydatetime()
-    equity_history_start = equity_history_end - timedelta(days=5)
-    for equity_index, (symbol, token) in enumerate(equity_tokens_by_symbol.items()):
-        if equity_index:
-            time.sleep(0.4)
-        try:
-            equity_history: list[dict[str, Any]] = broker.historical_data(
-                token, equity_history_start, equity_history_end, "minute"
-            )
-            if not equity_history:
-                print(f"No historical candles for {symbol}; waiting for live warm-up")
-                continue
-            equity_engine = equity_engines[symbol]
-            with equity_engine_locks[symbol]:
-                equity_frames: CandleFrames = equity_engine.load_history(equity_history)
-                current_five_bucket = pd.Timestamp.now(
-                    tz=settings.market_timezone
-                ).floor("5min")
-                closed_five_history = equity_frames["5min"].loc[
-                    equity_frames["5min"].index < current_five_bucket
-                ]
-                equity_history_rows = equity_candle_records(
-                    symbol, "1min", equity_frames["1min"]
-                ) + equity_candle_records(symbol, "5min", closed_five_history)
-                if not closed_five_history.empty:
-                    last_equity_persisted_five_minute[symbol] = cast(
-                        pd.Timestamp, closed_five_history.index[-1]
-                    )
-            insert_equity_candles(equity_history_rows)
-            print(
-                f"Equity warm-up {symbol}: {len(equity_frames['1min'])} 1m bars, "
-                f"{len(equity_frames['5min'])} 5m bars"
-            )
-        except Exception as exc:
-            print(f"Equity history warm-up failed for {symbol}: {exc}")
-
+    # Equity history is warmed once, by the background warm_equity_history thread.
     while True:
         market_now = datetime.now(ZoneInfo(settings.market_timezone))
         close_time = market_now.replace(hour=15, minute=30, second=0, microsecond=0)
         seconds_until_close = max(1.0, (close_time - market_now).total_seconds())
         time.sleep(min(max(1, settings.news_refresh_seconds), seconds_until_close))
-        if market_session_has_ended():
+        market_now = datetime.now(ZoneInfo(settings.market_timezone))
+        if not is_market_open():
             broker.stop()
             stop_spot_refresh.set()
             stop_equity_reconcile.set()
             expire_stale_equity_signals(market_now, expire_all_open=True)
-            closed_reason = "NSE session ended at 15:30 IST; live market data is closed."
+            closed_reason = "NSE market is closed; live market data has stopped."
             update_market_status(
                 "CLOSED",
                 last_error="",
@@ -878,7 +1591,7 @@ def main() -> None:
             print(closed_reason, flush=True)
             break
         try:
-            news_bias = refresh_news()
+            news_bias, news_items = refresh_news(equity_news_aliases)
             print("News bias refreshed:", news_bias)
         except Exception as exc:
             print("News refresh error:", exc)

@@ -48,12 +48,18 @@ CREATE TABLE IF NOT EXISTS equity_candles (
 CREATE TABLE IF NOT EXISTS news (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,
+    author TEXT,
     title TEXT NOT NULL,
     url TEXT,
     published_at TEXT,
     fetched_at TEXT NOT NULL,
     sentiment REAL,
     market_bias TEXT,
+    summary TEXT,
+    event_categories_json TEXT NOT NULL DEFAULT '[]',
+    symbols_json TEXT NOT NULL DEFAULT '[]',
+    published_epoch REAL,
+    analyst_recommendation TEXT,
     UNIQUE(source, title)
 );
 

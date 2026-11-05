@@ -17,6 +17,9 @@ class MarketDataAdapter(ABC):
     def set_instrument_tokens(self, instrument_tokens):
         raise NotImplementedError
 
+    def add_instrument_tokens(self, instrument_tokens):
+        raise NotImplementedError
+
     @abstractmethod
     def on_tick(self, callback):
         raise NotImplementedError

@@ -1,0 +1,53 @@
+name: NiftyAgent pre-market report (09:00 IST)
+
+on:
+  schedule:
+    # 09:00 Asia/Kolkata = 03:30 UTC; GitHub cron uses UTC.
+    - cron: "30 3 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: niftyagent-premarket-report
+  cancel-in-progress: false
+
+jobs:
+  premarket-report:
+    name: Collect pre-market context
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: nifty_intraday_agent_complete
+    env:
+      KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+      KITE_ACCESS_TOKEN: ${{ secrets.KITE_ACCESS_TOKEN }}
+      AUTO_ORDER_PLACEMENT: "false"
+      LIVE_MARKET_DATA: "false"
+      PREMARKET_ENABLED: "true"
+      MARKET_TIMEZONE: "Asia/Kolkata"
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: nifty_intraday_agent_complete/requirements.txt
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Generate 09:00 pre-market report
+        run: python scheduled_premarket_report.py premarket
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: niftyagent-premarket-${{ github.run_id }}
+          path: nifty_intraday_agent_complete/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
